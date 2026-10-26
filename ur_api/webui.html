@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UR Control Panel</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --fg:#1d2330; --mut:#677085; --line:#dde1e8; --acc:#2563eb; --ok:#16a34a;
+          --warn:#d97706; --bad:#dc2626; --stop:#b91c1c; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#12151c; --card:#1b2029; --fg:#e6e9ef;
+          --mut:#98a1b3; --line:#2b3240; --acc:#60a5fa; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line);
+           position:sticky; top:0; background:var(--bg); z-index:2; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 8px 0 0; }
+  .pill { padding:2px 8px; border-radius:99px; border:1px solid var(--line); color:var(--mut); font-size:12px; }
+  .pill.ok { color:var(--ok); border-color:var(--ok); } .pill.bad { color:var(--bad); border-color:var(--bad); }
+  .pill.warn { color:var(--warn); border-color:var(--warn); }
+  #stop { margin-left:auto; background:var(--stop); color:#fff; border:0; border-radius:8px; padding:10px 22px;
+          font-weight:700; font-size:16px; cursor:pointer; }
+  main { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; padding:12px 16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); margin:0 0 8px; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  td { padding:2px 4px; border-bottom:1px solid var(--line); } td:first-child { color:var(--mut); }
+  button { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px;
+           cursor:pointer; } button:hover { border-color:var(--acc); } button.pri { background:var(--acc); color:#fff; border:0; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  input, select { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 6px;
+                  width:84px; }
+  .jog { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+  #log { font:12px ui-monospace, monospace; white-space:pre-wrap; max-height:220px; overflow:auto; color:var(--mut); }
+  img.cam { width:100%; border-radius:6px; background:#000; min-height:120px; }
+  .mut { color:var(--mut); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">UR</h1>
+  <span class="pill" id="p-mode">mode ?</span>
+  <span class="pill" id="p-safety">safety ?</span>
+  <span class="pill" id="p-prog">program ?</span>
+  <span class="pill" id="p-lock">idle</span>
+  <button id="stop" title="Esc">STOP</button>
+</header>
+<main>
+  <section>
+    <h2>State</h2>
+    <table id="state"></table>
+    <div class="row"><button id="b-recover">Recover</button><button id="b-home">Home</button>
+      <label class="mut"><input type="checkbox" id="ubase" style="width:auto"> show pendant "base" frame</label></div>
+  </section>
+  <section>
+    <h2>Jog (straight line, TCP)</h2>
+    <div class="row">step <select id="step"><option>0.005</option><option selected>0.01</option><option>0.02</option>
+      <option>0.05</option><option>0.1</option></select> m &nbsp; speed <select id="vel"><option>0.02</option>
+      <option selected>0.05</option><option>0.1</option><option>0.2</option></select></div>
+    <div class="jog">
+      <button data-j="x+">x +</button><button data-j="y+">y +</button><button data-j="z+">z +</button>
+      <button data-j="x-">x −</button><button data-j="y-">y −</button><button data-j="z-">z −</button>
+    </div>
+    <div class="row"><button id="b-down">Point straight down</button></div>
+    <p class="mut">Moves the arm in base_link. Each press is one MoveL; STOP / Esc cancels.</p>
+  </section>
+  <section>
+    <h2>Gripper (RG6)</h2>
+    <div class="row">width <input id="gw" value="0.08"> m <button id="b-open">Open to</button></div>
+    <div class="row">force <input id="gf" value="40"> N <button id="b-grasp" class="pri">Grasp</button>
+      <button id="b-full">Open fully</button></div>
+    <p class="mut">Each action plays a pendant program, then hands control back to the driver (~2–3 s).</p>
+  </section>
+  <section>
+    <h2>Joints</h2>
+    <table id="joints"></table>
+    <div class="row"><input id="gj" style="width:100%" placeholder="6 values in degrees, comma separated">
+      <button id="b-goto">Go (PTP)</button><button id="b-dry">Dry run</button></div>
+  </section>
+  <section>
+    <h2>Force (flange sensor)</h2>
+    <table id="force"></table>
+    <div class="row"><button id="b-tare">Tare</button><button id="b-untare">Untare</button>
+      <button id="b-zero">Zero sensor</button></div>
+  </section>
+  <section>
+    <h2>Camera</h2>
+    <img class="cam" id="cam" alt="camera off">
+    <div class="row"><button id="b-cam">Start view</button><select id="camview"><option>color</option>
+      <option>depth</option></select></div>
+  </section>
+  <section style="grid-column:1/-1">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 4) => (v === null || v === undefined || Number.isNaN(v)) ? "–" : Number(v).toFixed(d);
+function log(msg) { const l = $("log"); l.textContent = `${new Date().toLocaleTimeString()}  ${msg}\n` + l.textContent; }
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  let body; try { body = await r.json(); } catch { body = {}; }
+  return { status: r.status, body };
+}
+async function act(label, path) {
+  log(`${label} …`);
+  const { status, body } = await api(path);
+  const o = body.outcome || body.status || body.error || "";
+  log(`${label}: ${status} ${o} ${body.msg || body.error_msg || ""}`);
+  refresh();
+  return body;
+}
+$("stop").onclick = () => act("STOP", "/control/stop");
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("stop").click(); });
+$("b-recover").onclick = () => act("recover", "/recover");
+$("b-home").onclick = () => confirm("Move the arm to the home pose?") && act("home", "/control/home");
+let last = null;
+document.querySelectorAll("[data-j]").forEach((b) => b.onclick = () => {
+  if (!last) return;
+  const ax = b.dataset.j[0], sg = b.dataset.j[1] === "+" ? 1 : -1, st = parseFloat($("step").value);
+  const p = { ...last.position }; p[ax] += sg * st;
+  act(`jog ${b.dataset.j} ${st} m`, `/control/plan_cartesian_path?x=${p.x}&y=${p.y}&z=${p.z}&velocity=${$("vel").value}`);
+});
+$("b-down").onclick = () => last && act("point down",
+  `/control/plan_joint_path?x=${last.position.x}&y=${last.position.y}&z=${last.position.z}&roll=180&pitch=0&yaw=${last.rpy_deg.yaw}`);
+$("b-open").onclick = () => act("open", `/control/gripper_open_force?width=${$("gw").value}`);
+$("b-full").onclick = () => act("open fully", "/control/gripper_open");
+$("b-grasp").onclick = () => act("grasp", `/control/gripper_grasp?width=0&eps_out=0.16&force=${$("gf").value}`);
+$("b-goto").onclick = () => act("goto", `/control/goto_joints?joints=${$("gj").value}&unit=deg`);
+$("b-dry").onclick = async () => { const r = await act("dry run", `/control/goto_joints?joints=${$("gj").value}&unit=deg&dry_run=1`);
+  if (r.duration_s) log(`  planner ${r.planner_used}, ${fmt(r.duration_s, 1)} s, travel ${JSON.stringify(r.joint_travel_deg)}`); };
+$("b-tare").onclick = () => act("tare", "/force/tare");
+$("b-untare").onclick = () => act("untare", "/force/untare");
+$("b-zero").onclick = () => act("zero sensor", "/force/zero_sensor");
+$("b-cam").onclick = () => { $("cam").src = `/camera/stream?view=${$("camview").value}&fps=10`; };
+function pill(id, text, cls) { const e = $(id); e.textContent = text; e.className = "pill " + (cls || ""); }
+function rows(el, pairs) { el.innerHTML = pairs.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join(""); }
+async function refresh() {
+  try {
+    const [s, j, h, f] = await Promise.all([api("/state"), api("/joints"), api("/health"), api("/force")]);
+    if (s.status === 200) {
+      last = s.body;
+      const P = $("ubase").checked ? { x: s.body.ur_base.position[0], y: s.body.ur_base.position[1], z: s.body.ur_base.position[2] }
+                                   : s.body.position;
+      const r = s.body.rpy_deg;
+      rows($("state"), [["TCP x y z (m)", `${fmt(P.x)} ${fmt(P.y)} ${fmt(P.z)} ${$("ubase").checked ? "(base)" : "(base_link)"}`],
+        ["roll pitch yaw (°)", `${fmt(r.roll, 1)} ${fmt(r.pitch, 1)} ${fmt(r.yaw, 1)}`],
+        ["gripper", `${s.body.gripper ? "open" : "closed"}, ${fmt(s.body.gripper_width_m * 1000, 1)} mm`]]);
+    }
+    if (j.status === 200) {
+      rows($("joints"), j.body.joints.map((x) => [x.name.replace("_joint", ""), `${fmt(x.position_deg, 2)}°  <span class="mut">(${fmt(x.to_limit_deg, 0)}° to limit)</span>`]));
+      if (!$("gj").value) $("gj").value = j.body.positions_deg.map((v) => v.toFixed(1)).join(",");
+    }
+    if (h.status === 200) {
+      const b = h.body;
+      pill("p-mode", b.mock_hardware ? "MOCK hardware" : `mode ${b.robot_mode}`, b.robot_mode === "RUNNING" || b.mock_hardware ? "ok" : "warn");
+      pill("p-safety", `safety ${b.safety_mode ?? "n/a"}`, !b.safety_mode || b.safety_mode === "NORMAL" ? "ok" : "bad");
+      pill("p-prog", `driver ${b.driver_program_running ? "in control" : "NOT in control"}`, b.driver_program_running ? "ok" : "bad");
+      pill("p-lock", b.lock_busy ? "busy" : "idle", b.lock_busy ? "warn" : "");
+    }
+    if (f.status === 200) {
+      const b = f.body;
+      rows($("force"), [["net force (N)", `${fmt(b.net_force.x, 2)} ${fmt(b.net_force.y, 2)} ${fmt(b.net_force.z, 2)}  |${fmt(b.magnitude, 2)}|`],
+        ["net torque (N·m)", `${fmt(b.net_torque.x, 3)} ${fmt(b.net_torque.y, 3)} ${fmt(b.net_torque.z, 3)}`],
+        ["baseline", b.baseline_source + (b.tared ? " (tared)" : "")]]);
+    } else rows($("force"), [["sensor", f.body.msg || "not available"]]);
+  } catch (e) { pill("p-mode", "API unreachable", "bad"); }
+}
+api("/").then(({ body }) => { if (body.data) $("title").textContent = body.data.split(" (")[0].replace("Hello, this is ", ""); });
+refresh(); setInterval(refresh, 700);
+</script>
+</body>
+</html>
