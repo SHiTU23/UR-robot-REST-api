@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MoveIt semantics for the UR cell: ur_moveit_config's groups and collision exclusions (driver 3.9.0), with the
+     planning tip moved from tool0 to the cell TCP, a gripper group, and the tool links excluded from collision
+     checks against the wrist links they are bolted to. -->
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
+  <xacro:arg name="name" default="ur"/>
+  <xacro:arg name="tf_prefix" default=""/>
+  <xacro:property name="p" value="$(arg tf_prefix)"/>
+
+  <group name="ur_manipulator">
+    <chain base_link="${p}base_link" tip_link="${p}tcp"/>
+  </group>
+  <group name="gripper">
+    <joint name="${p}rg6_finger_joint"/>
+  </group>
+  <end_effector name="rg6" parent_link="${p}tcp" group="gripper" parent_group="ur_manipulator"/>
+
+  <group_state name="up" group="ur_manipulator">
+    <joint name="${p}shoulder_pan_joint" value="0"/>
+    <joint name="${p}shoulder_lift_joint" value="-1.5707"/>
+    <joint name="${p}elbow_joint" value="0"/>
+    <joint name="${p}wrist_1_joint" value="-1.5707"/>
+    <joint name="${p}wrist_2_joint" value="0"/>
+    <joint name="${p}wrist_3_joint" value="0"/>
+  </group_state>
+
+  <!-- the arm (as ur_moveit_config) -->
+  <disable_collisions link1="${p}base_link" link2="${p}base_link_inertia" reason="Adjacent"/>
+  <disable_collisions link1="${p}base_link_inertia" link2="${p}shoulder_link" reason="Adjacent"/>
+  <disable_collisions link1="${p}tool0" link2="${p}wrist_1_link" reason="Never"/>
+  <disable_collisions link1="${p}tool0" link2="${p}wrist_2_link" reason="Never"/>
+  <disable_collisions link1="${p}tool0" link2="${p}wrist_3_link" reason="Adjacent"/>
+  <disable_collisions link1="${p}forearm_link" link2="${p}upper_arm_link" reason="Adjacent"/>
+  <disable_collisions link1="${p}forearm_link" link2="${p}wrist_1_link" reason="Adjacent"/>
+  <disable_collisions link1="${p}shoulder_link" link2="${p}upper_arm_link" reason="Adjacent"/>
+  <disable_collisions link1="${p}wrist_1_link" link2="${p}wrist_2_link" reason="Adjacent"/>
+  <disable_collisions link1="${p}wrist_1_link" link2="${p}wrist_3_link" reason="Never"/>
+  <disable_collisions link1="${p}wrist_2_link" link2="${p}wrist_3_link" reason="Adjacent"/>
+
+  <!-- the tool: rigidly bolted together and to the flange (the camera bracket touches the changer) -->
+  <xacro:macro name="tool_pair" params="a b reason">
+    <disable_collisions link1="${p}${a}" link2="${p}${b}" reason="${reason}"/>
+  </xacro:macro>
+  <xacro:property name="tool_links" value="${['tool_changer', 'rg6_body', 'rg6_left_finger', 'rg6_right_finger', 'wrist_camera', 'camera_bracket']}"/>
+  <xacro:macro name="pairs" params="items">
+    <xacro:if value="${len(items) > 1}">
+      <xacro:macro name="with_rest" params="a rest">
+        <xacro:if value="${len(rest) > 0}">
+          <xacro:tool_pair a="${a}" b="${rest[0]}" reason="Adjacent"/>
+          <xacro:with_rest a="${a}" rest="${rest[1:]}"/>
+        </xacro:if>
+      </xacro:macro>
+      <xacro:with_rest a="${items[0]}" rest="${items[1:]}"/>
+      <xacro:pairs items="${items[1:]}"/>
+    </xacro:if>
+  </xacro:macro>
+  <xacro:pairs items="${tool_links}"/>
+  <xacro:macro name="with_wrist" params="items">
+    <xacro:if value="${len(items) > 0}">
+      <xacro:tool_pair a="${items[0]}" b="wrist_3_link" reason="Adjacent"/>
+      <xacro:tool_pair a="${items[0]}" b="wrist_2_link" reason="Never"/>
+      <xacro:tool_pair a="${items[0]}" b="tool0" reason="Adjacent"/>
+      <xacro:with_wrist items="${items[1:]}"/>
+    </xacro:if>
+  </xacro:macro>
+  <xacro:with_wrist items="${tool_links}"/>
+</robot>

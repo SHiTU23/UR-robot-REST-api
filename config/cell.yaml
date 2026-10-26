@@ -1,0 +1,63 @@
+# UR cell settings: read by the robot description (xacro), the launch files and the REST API.
+# One value per line on purpose. MEASURE = an estimate that has NOT been checked on the rig;
+# confirm it before relying on the collision model near the bin or table.
+# Frames: base_link is ROS's robot base. The UR pendant / RTDE "base" frame is base_link turned
+# 180 deg about z (x and y negated). tool0 is the UR flange frame (z out of the flange).
+
+robot:
+  ur_type: ur10e                   # real arm: UR10 e-series, PolyScope 5.13.1 (dashboard, 2026-09-16)
+  ip: 192.168.1.100                # MEASURE: controller IP (env UR_ROBOT_IP wins)
+  # Home pose: recorded on the real arm right after eye_in_hand_home.urp (~/sota/ui/calibration/home_joints.json)
+  home_joints_rad: [3.7456185817718506, -1.4083529573730011, -2.4207828044891357, -3.5637909374632777, -1.7516759077655237, 2.790925979614258]
+  joint_limit_margin_rad: 0.02     # motion refuses targets / paths closer than this to a joint limit
+  max_joint_travel_deg: 100        # big-swing guard (any joint except wrist_3); 0 disables
+  travel_exempt_joints: [wrist_3_joint]   # tool roll only spins the flange
+
+# Tool stack on the flange (tool0 frame, metres). Measured 2026-09-16 (~/sota/ui/robot_config.py):
+# flange -> closed fingertips = 1 cm flange plate + 5 cm tool changer + 26 cm gripper = 0.320 m.
+tool:
+  tcp_z_m: 0.320                   # TCP = fingertip centre with the gripper closed, along tool0 z
+  finger_axis: x                   # the fingers close along tool0 x (re-checked 2026-09-16)
+  changer_radius_m: 0.0375         # MEASURE: flange plate + tool changer as one cylinder
+  changer_length_m: 0.060
+  body_size_m: [0.150, 0.075, 0.130]   # MEASURE: RG6 housing (x along the fingers, y, z)
+  finger_size_m: [0.025, 0.040, 0.130] # MEASURE: one finger envelope (thickness along x, width, length)
+  finger_inner_offset_m: 0.0       # finger grasp face sits at +-width/2 from the TCP axis
+  # Wrist camera (Orbbec Gemini 2, serial AY6KC52002D): pose from the hand-eye calibration of
+  # 2026-09-15 (~/sota/ui/calibration/hand_eye.json, 9 samples, 1.3 mm rms), as T_tool0_camera.
+  camera_xyz_m: [-0.06705131293308766, -0.11714507665028767, 0.10717890409021669]
+  camera_rpy_rad: [-0.03436, 0.01537, -0.50800]   # computed from that rotation matrix (sxyz; round trip 3e-16)
+  camera_box_m: [0.094, 0.029, 0.034]            # Gemini 2 body ~90 x 25 x 30 mm + 2 mm per side (x image right, y down, z optical axis)
+  camera_box_center_m: [0.0, 0.0, -0.015]        # MEASURE: body centre behind the optical centre
+  bracket_size_m: [0.045, 0.110, 0.030]          # MEASURE: camera bracket between the changer and the camera
+  bracket_xyz_m: [-0.030, -0.060, 0.090]         # MEASURE
+  bracket_rpy_rad: [0.0, 0.0, -0.50800]
+
+# OnRobot RG6 driven like ~/sota/ui/robot.py: write width (mm) and force (N) into RTDE input
+# registers, then play a pendant program that reads them, then hand control back to the driver.
+gripper:
+  type: rg6
+  open_program: gripper_open.urp   # confirmed on the pendant 2026-09-16
+  close_program: gripper_close.urp # confirmed on the pendant 2026-09-16
+  program_timeout_s: 10.0
+  width_register: 18               # read_input_float_register(18): target width, mm
+  force_register: 19               # read_input_float_register(19): force, N
+  width_feedback_register: -1      # output_double_register with the measured width (mm) written by the programs; -1 = none
+  max_width_m: 0.160               # RG6 stroke 0-160 mm
+  min_force_n: 25.0                # RG6 force range 25-120 N
+  max_force_n: 120.0
+  default_force_n: 40.0
+  open_threshold_m: 0.03           # /state "gripper": 1 (open) above this width
+  close_squeeze_m: 0.010           # a grasp closes this far past (width - eps_in), so the force limit ends it (sota UI value)
+
+# Collision geometry fixed in the cell (base_link frame). Each line: name, size [x y z], centre [x y z].
+# MEASURE before trusting it: the sota UI's safe box (2026-09-16, freedrive probe of the TCP) was
+# x -0.70..0.02, y -0.62..0.20, z -0.12..0.35 in the pendant "base" frame = x -0.02..0.70, y -0.20..0.62 here.
+world_boxes:
+  - {name: table, size: [2.0, 2.0, 0.04], center: [0.0, 0.0, -0.160]}   # MEASURE: top at z = -0.14 (TCP floor -0.12 probed)
+
+camera:
+  backend: orbbec                  # orbbec | realsense | none (env UR_CAMERA wins)
+  width: 1280
+  height: 720
+  fps: 30                          # colour 1280x720 + Y16 depth at 30 fps: verified on this Gemini 2 (sota UI, 2026-09-14)
