@@ -1,0 +1,52 @@
+# UR REST API: the ROS side (ur_robot_driver + move_group + finger states) and the HTTP API, one image.
+#   UR_ROBOT_IP=192.168.1.100 docker compose up -d        # real arm (Remote Control mode on the pendant)
+#   UR_MOCK=true docker compose up -d                     # no robot: mock hardware, simulated gripper
+#   ./run.sh up | mock | ursim | down | logs | test       # the same, plus URSim for testing
+# Both services use the host network (ROS 2 discovery + the driver's reverse connections from the robot).
+x-common: &common
+  image: ur-rest-api:latest
+  build: {context: ., dockerfile: docker/Dockerfile}
+  network_mode: host
+  ipc: host
+  restart: unless-stopped
+  volumes: ["./:/app"]                       # code, config, state/ and data/ (persist across restarts)
+  environment:
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+    UR_ROBOT_IP: ${UR_ROBOT_IP:-}
+    UR_CELL_CONFIG: ${UR_CELL_CONFIG:-/app/config/cell.yaml}
+
+services:
+  ros:
+    <<: *common
+    container_name: ur-ros
+    # the driver asks for real-time scheduling (it still runs without, with a warning)
+    cap_add: [SYS_NICE]
+    ulimits: {rtprio: 99, memlock: -1}
+    command: >
+      bash -c 'ros2 launch /app/ros/launch/cell.launch.py use_mock_hardware:=${UR_MOCK:-false}
+      $${UR_ROBOT_IP:+robot_ip:=$$UR_ROBOT_IP} headless_mode:=true launch_rviz:=false'
+
+  api:
+    <<: *common
+    container_name: ur-api
+    depends_on: [ros]
+    privileged: true                         # the wrist camera (Orbbec: V4L2 /dev/video*; RealSense: USB)
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      UR_ROBOT_IP: ${UR_ROBOT_IP:-}
+      UR_CELL_CONFIG: ${UR_CELL_CONFIG:-/app/config/cell.yaml}
+      UR_MOCK_HARDWARE: ${UR_MOCK_HARDWARE:-0}
+      UR_CAMERA: ${UR_CAMERA:-}
+      UR_API_PORT: ${UR_API_PORT:-5000}
+    command: python3 /app/ur_api/server.py
+
+  rviz:                                      # optional: docker compose --profile rviz up rviz (needs X11)
+    <<: *common
+    container_name: ur-rviz
+    profiles: [rviz]
+    restart: "no"
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      DISPLAY: ${DISPLAY:-:0}
+    volumes: ["./:/app", "/tmp/.X11-unix:/tmp/.X11-unix"]
+    command: ros2 run rviz2 rviz2 -d /app/ros/rviz/cell.rviz
