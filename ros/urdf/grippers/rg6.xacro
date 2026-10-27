@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<!-- OnRobot RG6: meshes and linkage from BrettRD/onrobot_grippers (MIT, see ros/meshes/onrobot_rg6/README.md),
+     with the links renamed rg6_* and the Gazebo / transmission parts left out.
+     rg6_finger_joint (revolute) drives the parallel linkage; every other finger joint mimics it. Its relation
+     to the gripper width is in config/grippers/rg6.yaml (computed from this model, tools/gripper_table.py).
+     In this model the fingers close along the base link's y axis; `yaw` turns it on the mount.
+     Joint limits widened from the original +-0.628 rad (151 mm at most) to +-0.90 rad: the model then opens to
+     159 mm, the real RG6 to 160 mm (datasheet); rg6_finger_joint stops at +0.628 rad = closed (0 mm). -->
+<robot xmlns:xacro="http://wiki.ros.org/xacro">
+
+  <xacro:property name="rg6_mesh" value="file:///app/ros/meshes/onrobot_rg6"/>
+
+  <xacro:macro name="rg6_link" params="name mesh rgba">
+    <link name="${name}">
+      <visual>
+        <geometry><mesh filename="${rg6_mesh}/visual/${mesh}.stl"/></geometry>
+        <material name="${name}_mat"><color rgba="${rgba}"/></material>
+      </visual>
+      <collision>
+        <geometry><mesh filename="${rg6_mesh}/collision/${mesh}.stl"/></geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="rg6_finger" params="p side reflect">
+    <xacro:rg6_link name="${p}rg6_${side}_outer_knuckle" mesh="outer_knuckle" rgba="0.8 0.8 0.8 1"/>
+    <xacro:rg6_link name="${p}rg6_${side}_inner_knuckle" mesh="inner_knuckle" rgba="0.8 0.8 0.8 1"/>
+    <xacro:rg6_link name="${p}rg6_${side}_inner_finger" mesh="inner_finger" rgba="0.1 0.1 0.1 1"/>
+    <joint name="${p}rg6_${side}_inner_knuckle_joint" type="revolute">
+      <origin xyz="0 ${reflect * -0.012720} 0.159500" rpy="0 0 ${(reflect - 1) * pi / 2}"/>
+      <parent link="${p}rg6_base_link"/>
+      <child link="${p}rg6_${side}_inner_knuckle"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.90" upper="0.90" velocity="2.0" effort="1000"/>
+      <mimic joint="${p}rg6_finger_joint" multiplier="-1" offset="0"/>
+    </joint>
+    <joint name="${p}rg6_${side}_inner_finger_joint" type="revolute">
+      <origin xyz="0 ${-(0.071447 - 0.024112)} ${0.201308 - 0.136813}" rpy="0 0 0"/>
+      <parent link="${p}rg6_${side}_outer_knuckle"/>
+      <child link="${p}rg6_${side}_inner_finger"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.90" upper="0.90" velocity="2.0" effort="1000"/>
+      <mimic joint="${p}rg6_finger_joint" multiplier="1" offset="0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- the RG6 base (mounting face) at z along `parent`'s z, turned by yaw -->
+  <xacro:macro name="gripper_rg6" params="tf_prefix parent z yaw">
+    <xacro:property name="p" value="${tf_prefix}"/>
+    <xacro:rg6_link name="${p}rg6_base_link" mesh="base_link" rgba="0.8 0.8 0.8 1"/>
+    <joint name="${p}${parent}-rg6_base_link" type="fixed">
+      <parent link="${p}${parent}"/>
+      <child link="${p}rg6_base_link"/>
+      <origin xyz="0 0 ${z}" rpy="0 0 ${yaw}"/>
+    </joint>
+    <xacro:rg6_finger p="${p}" side="left" reflect="1.0"/>
+    <xacro:rg6_finger p="${p}" side="right" reflect="-1.0"/>
+    <joint name="${p}rg6_finger_joint" type="revolute">
+      <origin xyz="0 -0.024112 0.136813" rpy="0 0 0"/>
+      <parent link="${p}rg6_base_link"/>
+      <child link="${p}rg6_left_outer_knuckle"/>
+      <axis xyz="-1 0 0"/>
+      <limit lower="-0.90" upper="0.628319" velocity="2.0" effort="1000"/>
+    </joint>
+    <joint name="${p}rg6_right_outer_knuckle_joint" type="revolute">
+      <origin xyz="0 0.024112 0.136813" rpy="0 0 ${pi}"/>
+      <parent link="${p}rg6_base_link"/>
+      <child link="${p}rg6_right_outer_knuckle"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.90" upper="0.90" velocity="2.0" effort="1000"/>
+      <mimic joint="${p}rg6_finger_joint" multiplier="-1" offset="0"/>
+    </joint>
+  </xacro:macro>
+</robot>

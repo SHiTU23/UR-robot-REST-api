@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
-<!-- UR arm + the cell's tool (tool changer, OnRobot RG6, wrist camera) for the UR REST API.
+<!-- UR arm + the cell's tool (tool changer, gripper, wrist camera) for the UR REST API.
      The UR part is ur_robot_driver's urdf/ur.urdf.xacro (driver 3.9.0), unchanged: same arguments, same
      ros2_control block, so the driver's launch files can use this file as description_file.
-     Added: the cell_config argument and the tool macro (urdf/cell_tool.xacro) on tool0. -->
+     Added: the cell_config / gripper arguments and the tool macro (urdf/cell_tool.xacro) on tool0. -->
 <robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
   <!-- robot name parameter -->
   <xacro:arg name="name" default="ur"/>
@@ -12,7 +12,10 @@
   <xacro:include filename="$(find ur_robot_driver)/urdf/ur.ros2_control.xacro" />
   <xacro:include filename="$(find ur_description)/urdf/inc/ur_transmissions.xacro" />
   <xacro:include filename="cell_tool.xacro" />
-  <xacro:arg name="cell_config" default="/app/config/cell.yaml"/>
+  <!-- from the environment: the driver's ur_rsp.launch.py cannot pass extra xacro arguments -->
+  <xacro:arg name="cell_config" default="$(optenv UR_CELL_CONFIG /app/config/cell.yaml)"/>
+  <xacro:arg name="gripper" default="$(optenv UR_GRIPPER)"/>
+  <xacro:arg name="grippers_dir" default="/app/config/grippers"/>
 
   <!-- possible 'ur_type' values: ur3, ur3e, ur5, ur5e, ur7e, ur10, ur10e, ur12e, ur16e, ur8long, ur15, ur18, ur20, ur30 -->
   <!-- the default value should raise an error in case this was called without defining the type -->
@@ -84,7 +87,8 @@
   </xacro:ur_robot>
 
   <!-- the cell tool on the flange -->
-  <xacro:cell_tool tf_prefix="$(arg tf_prefix)" cell="${xacro.load_yaml('$(arg cell_config)')}"/>
+  <xacro:cell_tool tf_prefix="$(arg tf_prefix)" cell="${xacro.load_yaml('$(arg cell_config)')}"
+                   gripper="$(arg gripper)" grippers_dir="$(arg grippers_dir)"/>
 
   <!-- ros2 control instance -->
   <xacro:ur_ros2_control

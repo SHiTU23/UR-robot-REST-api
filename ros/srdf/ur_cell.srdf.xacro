@@ -1,19 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- MoveIt semantics for the UR cell: ur_moveit_config's groups and collision exclusions (driver 3.9.0), with the
-     planning tip moved from tool0 to the cell TCP, a gripper group, and the tool links excluded from collision
+     planning tip moved from tool0 to the cell TCP, a gripper group (the chosen gripper model), and the tool links excluded from collision
      checks against the wrist links they are bolted to. -->
 <robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
   <xacro:arg name="name" default="ur"/>
   <xacro:arg name="tf_prefix" default=""/>
   <xacro:property name="p" value="$(arg tf_prefix)"/>
+  <!-- the gripper model, chosen as in the URDF (env UR_GRIPPER, else gripper.model in the cell config) -->
+  <xacro:arg name="cell_config" default="$(optenv UR_CELL_CONFIG /app/config/cell.yaml)"/>
+  <xacro:arg name="gripper" default="$(optenv UR_GRIPPER)"/>
+  <xacro:property name="gripper_arg" value="$(arg gripper)"/>
+  <xacro:property name="cell" value="${xacro.load_yaml('$(arg cell_config)')}"/>
+  <xacro:property name="model" value="${gripper_arg if gripper_arg else cell['gripper']['model']}"/>
+  <xacro:property name="gm" value="${xacro.load_yaml('/app/config/grippers/' + model + '.yaml')}"/>
 
   <group name="ur_manipulator">
     <chain base_link="${p}base_link" tip_link="${p}tcp"/>
   </group>
   <group name="gripper">
-    <joint name="${p}rg6_finger_joint"/>
+    <joint name="${p}${gm['joint']}"/>
   </group>
-  <end_effector name="rg6" parent_link="${p}tcp" group="gripper" parent_group="ur_manipulator"/>
+  <end_effector name="gripper" parent_link="${p}tcp" group="gripper" parent_group="ur_manipulator"/>
 
   <group_state name="up" group="ur_manipulator">
     <joint name="${p}shoulder_pan_joint" value="0"/>
@@ -37,11 +44,12 @@
   <disable_collisions link1="${p}wrist_1_link" link2="${p}wrist_3_link" reason="Never"/>
   <disable_collisions link1="${p}wrist_2_link" link2="${p}wrist_3_link" reason="Adjacent"/>
 
-  <!-- the tool: rigidly bolted together and to the flange (the camera bracket touches the changer) -->
+  <!-- the tool: rigidly bolted together and to the flange (the camera bracket touches the changer); all pairs are
+       excluded, the gripper's moving links too (they move only within the gripper's own linkage) -->
   <xacro:macro name="tool_pair" params="a b reason">
     <disable_collisions link1="${p}${a}" link2="${p}${b}" reason="${reason}"/>
   </xacro:macro>
-  <xacro:property name="tool_links" value="${['tool_changer', 'rg6_body', 'rg6_left_finger', 'rg6_right_finger', 'wrist_camera', 'camera_bracket']}"/>
+  <xacro:property name="tool_links" value="${['tool_changer'] + gm['links'] + ['wrist_camera', 'camera_bracket']}"/>
   <xacro:macro name="pairs" params="items">
     <xacro:if value="${len(items) > 1}">
       <xacro:macro name="with_rest" params="a rest">

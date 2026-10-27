@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!-- Robotiq 2F-85 from the official description (ros-jazzy-robotiq-description, BSD), on Robotiq's UR adapter
+     plate (11 mm). Its ros2_control block is left out: like the RG6, the gripper is not a ros2_control device
+     here; ros/scripts/finger_state_publisher.py publishes robotiq_85_left_knuckle_joint (0 open .. 0.8 closed),
+     the other finger joints mimic it. Width <-> joint: config/grippers/robotiq_2f85.yaml (tools/gripper_table.py).
+     The fingers close along the base link's x axis; `yaw` turns it on the mount. -->
+<robot xmlns:xacro="http://wiki.ros.org/xacro">
+  <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
+  <xacro:include filename="$(find robotiq_description)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
+
+  <!-- the adapter plate's flange side at z along `parent`'s z, turned by yaw -->
+  <xacro:macro name="gripper_robotiq_2f85" params="tf_prefix parent z yaw">
+    <link name="${tf_prefix}robotiq_mount"/>
+    <joint name="${tf_prefix}${parent}-robotiq_mount" type="fixed">
+      <parent link="${tf_prefix}${parent}"/>
+      <child link="${tf_prefix}robotiq_mount"/>
+      <origin xyz="0 0 ${z}" rpy="0 0 ${yaw}"/>
+    </joint>
+    <xacro:ur_to_robotiq prefix="${tf_prefix}" connected_to="${tf_prefix}robotiq_mount"/>
+    <xacro:robotiq_gripper name="RobotiqGripperHardwareInterface" prefix="${tf_prefix}"
+                           parent="${tf_prefix}gripper_mount_link" include_ros2_control="false">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </xacro:robotiq_gripper>
+  </xacro:macro>
+</robot>

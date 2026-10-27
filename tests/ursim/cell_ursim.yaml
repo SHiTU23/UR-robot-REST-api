@@ -14,15 +14,15 @@ robot:
   travel_exempt_joints: [wrist_3_joint]   # tool roll only spins the flange
 
 # Tool stack on the flange (tool0 frame, metres). Measured 2026-09-16 (~/sota/ui/robot_config.py):
-# flange -> closed fingertips = 1 cm flange plate + 5 cm tool changer + 26 cm gripper = 0.320 m.
 tool:
-  tcp_z_m: 0.320                   # TCP = fingertip centre with the gripper closed, along tool0 z
+  # TCP = fingertip centre with the gripper closed. It is not set here: it follows from the gripper model,
+  # flange -> changer_length_m -> gripper mount face -> closed fingertips (config/grippers/<model>.yaml table).
   finger_axis: x                   # the fingers close along tool0 x (re-checked 2026-09-16)
   changer_radius_m: 0.0375         # MEASURE: flange plate + tool changer as one cylinder
-  changer_length_m: 0.060
-  body_size_m: [0.150, 0.075, 0.130]   # MEASURE: RG6 housing (x along the fingers, y, z)
-  finger_size_m: [0.025, 0.040, 0.130] # MEASURE: one finger envelope (thickness along x, width, length)
-  finger_inner_offset_m: 0.0       # finger grasp face sits at +-width/2 from the TCP axis
+  # Derived 2026-10-27: the measured TCP 0.320 m (sota UI, 2026-09-16, gripper closed) minus the RG6 model's
+  # closed tip depth 0.2832 m. The sota note says 1 cm plate + 5 cm changer + 26 cm gripper, i.e. the model's
+  # base probably includes part of the quick changer. MEASURE flange -> RG6 housing to settle it.
+  changer_length_m: 0.0368
   # Wrist camera (Orbbec Gemini 2, serial AY6KC52002D): pose from the hand-eye calibration of
   # 2026-09-15 (~/sota/ui/calibration/hand_eye.json, 9 samples, 1.3 mm rms), as T_tool0_camera.
   camera_xyz_m: [-0.06705131293308766, -0.11714507665028767, 0.10717890409021669]
@@ -36,17 +36,17 @@ tool:
 # OnRobot RG6 driven like ~/sota/ui/robot.py: write width (mm) and force (N) into RTDE input
 # registers, then play a pendant program that reads them, then hand control back to the driver.
 gripper:
-  type: rg6
+  # Which gripper is on the flange (its model: config/grippers/<model>.yaml). Env UR_GRIPPER wins.
+  #   rg6           OnRobot RG6, driven by the pendant programs below
+  #   robotiq_2f85  Robotiq 2F-85 (model only for now: simulated gripper, no control on the real arm yet)
+  model: rg6
+  type: rg6                        # control backend: rg6 | sim
   open_program: gripper_open.urp   # confirmed on the pendant 2026-09-16
   close_program: gripper_close.urp # confirmed on the pendant 2026-09-16
   program_timeout_s: 10.0
   width_register: 18               # read_input_float_register(18): target width, mm
   force_register: 19               # read_input_float_register(19): force, N
   width_feedback_register: 12      # URSim stand-in programs echo the commanded width here
-  max_width_m: 0.160               # RG6 stroke 0-160 mm
-  min_force_n: 25.0                # RG6 force range 25-120 N
-  max_force_n: 120.0
-  default_force_n: 40.0
   open_threshold_m: 0.03           # /state "gripper": 1 (open) above this width
   close_squeeze_m: 0.010           # a grasp closes this far past (width - eps_in), so the force limit ends it (sota UI value)
 

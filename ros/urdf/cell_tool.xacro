@@ -1,9 +1,10 @@
 <?xml version="1.0"?>
-<!-- The cell tool on tool0: tool changer, OnRobot RG6 housing + two fingers, wrist camera + bracket, and the
-     TCP link. All sizes come from config/cell.yaml (section "tool"); values marked MEASURE there are estimates.
+<!-- The cell tool on tool0: tool changer, the gripper (a model from ros/urdf/grippers/, chosen by gripper.model in
+     config/cell.yaml or env UR_GRIPPER), wrist camera + bracket, and the TCP link. Sizes come from
+     config/cell.yaml (section "tool"); values marked MEASURE there are estimates.
      Frames (tool0 = UR flange): z points out of the flange towards the fingers, the fingers close along x.
-     rg6_finger_joint is the opening of ONE finger (half the gripper width, 0 .. max_width/2); the right
-     finger mimics it. It is not a ros2_control joint: ros/scripts/finger_state_publisher.py publishes it. -->
+     The gripper's driving joint is not a ros2_control joint: ros/scripts/finger_state_publisher.py publishes it
+     from the width, through the model's table (config/grippers/<model>.yaml). -->
 <robot xmlns:xacro="http://wiki.ros.org/xacro">
 
   <xacro:macro name="cell_box" params="name size xyz rpy rgba">
@@ -20,15 +21,14 @@
     </link>
   </xacro:macro>
 
-  <xacro:macro name="cell_tool" params="tf_prefix cell">
+  <xacro:macro name="cell_tool" params="tf_prefix cell gripper grippers_dir">
     <xacro:property name="t" value="${cell['tool']}"/>
-    <xacro:property name="g" value="${cell['gripper']}"/>
+    <xacro:property name="model" value="${gripper if gripper else cell['gripper']['model']}"/>
+    <xacro:property name="gm" value="${xacro.load_yaml(grippers_dir + '/' + model + '.yaml')}"/>
     <xacro:property name="L" value="${t['changer_length_m']}"/>
-    <xacro:property name="B" value="${t['body_size_m']}"/>
-    <xacro:property name="F" value="${t['finger_size_m']}"/>
-    <xacro:property name="tcp" value="${t['tcp_z_m']}"/>
-    <xacro:property name="ax" value="${'1 0 0' if t['finger_axis'] == 'x' else '0 1 0'}"/>
-    <xacro:property name="yaw" value="${0.0 if t['finger_axis'] == 'x' else pi / 2}"/>
+    <!-- table rows run open -> closed: the last row is the closed gripper -->
+    <xacro:property name="tcp" value="${L + gm['mount_offset_m'] + gm['table'][-1][2]}"/>
+    <xacro:property name="yaw" value="${0.0 if gm['closing_axis_in_mount'] == t['finger_axis'] else pi / 2}"/>
 
     <!-- flange plate + tool changer -->
     <link name="${tf_prefix}tool_changer">
@@ -47,34 +47,15 @@
       <child link="${tf_prefix}tool_changer"/>
     </joint>
 
-    <!-- RG6 housing (its x side along the finger motion) -->
-    <xacro:cell_box name="${tf_prefix}rg6_body" size="${B[0]} ${B[1]} ${B[2]}" xyz="0 0 ${L + B[2] / 2}"
-                    rpy="0 0 ${yaw}" rgba="0.2 0.2 0.2 1"/>
-    <joint name="${tf_prefix}tool0-rg6_body" type="fixed">
-      <parent link="${tf_prefix}tool0"/>
-      <child link="${tf_prefix}rg6_body"/>
-    </joint>
-
-    <!-- fingers: each a box whose inner (grasping) face sits at the joint position -->
-    <xacro:cell_box name="${tf_prefix}rg6_left_finger" size="${F[0]} ${F[1]} ${F[2]}"
-                    xyz="${F[0] / 2} 0 0" rpy="0 0 0" rgba="0.75 0.75 0.75 1"/>
-    <joint name="${tf_prefix}rg6_finger_joint" type="prismatic">
-      <parent link="${tf_prefix}rg6_body"/>
-      <child link="${tf_prefix}rg6_left_finger"/>
-      <origin xyz="0 0 ${tcp - F[2] / 2}" rpy="0 0 ${yaw}"/>
-      <axis xyz="1 0 0"/>
-      <limit lower="0.0" upper="${g['max_width_m'] / 2}" effort="200" velocity="0.2"/>
-    </joint>
-    <xacro:cell_box name="${tf_prefix}rg6_right_finger" size="${F[0]} ${F[1]} ${F[2]}"
-                    xyz="${-F[0] / 2} 0 0" rpy="0 0 0" rgba="0.75 0.75 0.75 1"/>
-    <joint name="${tf_prefix}rg6_right_finger_joint" type="prismatic">
-      <parent link="${tf_prefix}rg6_body"/>
-      <child link="${tf_prefix}rg6_right_finger"/>
-      <origin xyz="0 0 ${tcp - F[2] / 2}" rpy="0 0 ${yaw}"/>
-      <axis xyz="-1 0 0"/>
-      <limit lower="0.0" upper="${g['max_width_m'] / 2}" effort="200" velocity="0.2"/>
-      <mimic joint="${tf_prefix}rg6_finger_joint" multiplier="1" offset="0"/>
-    </joint>
+    <!-- the gripper on the changer -->
+    <xacro:if value="${model == 'rg6'}">
+      <xacro:include filename="grippers/rg6.xacro"/>
+      <xacro:gripper_rg6 tf_prefix="${tf_prefix}" parent="tool0" z="${L + gm['mount_offset_m']}" yaw="${yaw}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'robotiq_2f85'}">
+      <xacro:include filename="grippers/robotiq_2f85.xacro"/>
+      <xacro:gripper_robotiq_2f85 tf_prefix="${tf_prefix}" parent="tool0" z="${L + gm['mount_offset_m']}" yaw="${yaw}"/>
+    </xacro:if>
 
     <!-- TCP: fingertip centre with the gripper closed -->
     <link name="${tf_prefix}tcp"/>

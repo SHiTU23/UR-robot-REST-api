@@ -1,4 +1,4 @@
-"""The whole ROS side of the UR cell: ur_robot_driver (with the cell description), move_group, and the RG6
+"""The whole ROS side of the UR cell: ur_robot_driver (with the cell description), move_group, and the gripper
 finger state publisher. The REST API (ur_api/server.py) runs as a separate process and talks to these.
 
     ros2 launch /app/ros/launch/cell.launch.py robot_ip:=<controller IP>          # real arm or URSim
@@ -19,6 +19,8 @@ from launch_ros.substitutions import FindPackageShare
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CELL = yaml.safe_load(open(os.environ.get("UR_CELL_CONFIG", os.path.join(HERE, "..", "..", "config", "cell.yaml"))))
+GRIPPER = os.environ.get("UR_GRIPPER") or CELL["gripper"]["model"]      # the same choice as the URDF / SRDF
+GM = yaml.safe_load(open(os.path.join(HERE, "..", "..", "config", "grippers", GRIPPER + ".yaml")))
 
 
 def _nodes(context):
@@ -40,7 +42,9 @@ def _nodes(context):
                           "use_mock_hardware": lc("use_mock_hardware")}.items())
     fingers = Node(executable=sys.executable, arguments=[os.path.join(HERE, "..", "scripts", "finger_state_publisher.py")],
                    name="finger_state_publisher", output="screen",
-                   parameters=[{"max_width_m": float(CELL["gripper"]["max_width_m"])}])
+                   parameters=[{"joint": GM["joint"], "max_width_m": float(GM["max_width_m"]),
+                                "table_joint": [float(r[0]) for r in GM["table"]],
+                                "table_width": [float(r[1]) for r in GM["table"]]}])
     return [driver, moveit, fingers]
 
 

@@ -23,6 +23,11 @@ ARG PYORBBECSDK_WHEEL=https://github.com/orbbec/pyorbbecsdk/releases/download/v2
 RUN pip3 install --no-cache-dir --break-system-packages --no-deps "${PYORBBECSDK_WHEEL}" \
     && pip3 install --no-cache-dir --break-system-packages pyrealsense2==2.56.5.9235
 
+# Gripper models (ros/urdf/grippers): the Robotiq 2F-85 description (official, BSD). The RG6 meshes are in the repo.
+# Own layer so adding it does not rebuild the big ROS layer above.
+RUN apt-get update && apt-get install -y --no-install-recommends ros-jazzy-robotiq-description \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 WORKDIR /app
 COPY . /app
