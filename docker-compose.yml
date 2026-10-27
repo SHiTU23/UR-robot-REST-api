@@ -1,6 +1,7 @@
 # UR REST API: the ROS side (ur_robot_driver + move_group + finger states) and the HTTP API, one image.
 #   UR_ROBOT_IP=192.168.1.100 docker compose up -d        # real arm (Remote Control mode on the pendant)
 #   UR_MOCK=true docker compose up -d                     # no robot: mock hardware, simulated gripper
+#   UR_GRIPPER=robotiq_2f85 ...                           # another gripper model (config/grippers/)
 #   ./run.sh up | mock | ursim | down | logs | test       # the same, plus URSim for testing
 # Both services use the host network (ROS 2 discovery + the driver's reverse connections from the robot).
 x-common: &common
@@ -14,6 +15,7 @@ x-common: &common
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
     UR_ROBOT_IP: ${UR_ROBOT_IP:-}
     UR_CELL_CONFIG: ${UR_CELL_CONFIG:-/app/config/cell.yaml}
+    UR_GRIPPER: ${UR_GRIPPER:-}              # rg6 | robotiq_2f85; empty = gripper.model in the cell config
 
 services:
   ros:
@@ -35,6 +37,7 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
       UR_ROBOT_IP: ${UR_ROBOT_IP:-}
       UR_CELL_CONFIG: ${UR_CELL_CONFIG:-/app/config/cell.yaml}
+      UR_GRIPPER: ${UR_GRIPPER:-}
       UR_MOCK_HARDWARE: ${UR_MOCK_HARDWARE:-0}
       UR_CAMERA: ${UR_CAMERA:-}
       UR_API_PORT: ${UR_API_PORT:-5000}

@@ -1,7 +1,7 @@
 # UR REST API
 
-A REST API for a **Universal Robots arm (UR10e) with an OnRobot RG6 gripper**, on **ROS 2 Jazzy + MoveIt 2**
-(Universal Robots' `ur_robot_driver`), in Docker.
+A REST API for a **Universal Robots arm (UR10e) with an OnRobot RG6 gripper** (or a Robotiq 2F-85, see
+[Grippers](#grippers)), on **ROS 2 Jazzy + MoveIt 2** (Universal Robots' `ur_robot_driver`), in Docker.
 
 It speaks the same HTTP contract as the Franka API,
 [XiaoxiaoZ/Franka-Emika-Panda-robot-REST-api](https://github.com/XiaoxiaoZ/Franka-Emika-Panda-robot-REST-api).
@@ -34,9 +34,12 @@ open http://<pc>:5000/ui                                     # browser panel: st
 
 | path | content |
 |---|---|
-| `config/cell.yaml` | **everything cell-specific**, one value per line: robot IP, home pose, tool (TCP 0.320 m), RG6 programs and registers, camera, fixed collision boxes. `MEASURE` marks estimates |
-| `ros/urdf/` | `ur_cell.urdf.xacro`: the driver's UR description plus the tool on the flange (`cell_tool.xacro`: tool changer, RG6, fingers, camera at its hand-eye pose, `tcp` link) |
-| `ros/srdf/` | planning group `ur_manipulator`, `base_link` → `tcp`; tool/wrist collision exclusions |
+| `config/cell.yaml` | **everything cell-specific**, one value per line: robot IP, home pose, tool changer, which gripper, RG6 programs and registers, camera, fixed collision boxes. `MEASURE` marks estimates |
+| `config/grippers/` | one file per gripper model: links, driving joint, limits, and the width table computed from the model |
+| `ros/urdf/` | `ur_cell.urdf.xacro`: the driver's UR description plus the tool on the flange (`cell_tool.xacro`: tool changer, the gripper from `grippers/`, camera at its hand-eye pose, `tcp` link) |
+| `ros/meshes/` | the RG6 meshes (MIT, from BrettRD/onrobot_grippers). The 2F-85 comes from `ros-jazzy-robotiq-description` |
+| `ros/srdf/` | planning group `ur_manipulator`, `base_link` → `tcp`; tool/wrist collision exclusions (from the gripper's link list) |
+| `tools/gripper_table.py` | computes a gripper's width table from its model |
 | `ros/launch/cell.launch.py` | driver + move_group + finger states |
 | `ur_api/` | the server (see the table below) |
 | `tests/` | unit tests, the end-to-end `api_smoke.py`, URSim set-up |
@@ -60,8 +63,36 @@ open http://<pc>:5000/ui                                     # browser panel: st
 ./run.sh ursim                # URSim (UR10e) in docker + the real driver      -> http://localhost:5000
 UR_ROBOT_IP=<ip> ./run.sh up  # the real arm
 ./run.sh test [url] [ursim ip]   # end-to-end checks (MOVES the robot it talks to)
+./run.sh view rg6             # mock robot with that gripper + RViz (also: view robotiq_2f85)
+./run.sh rviz                 # RViz on whatever stack runs
 ./run.sh logs | down
 ```
+
+## Grippers
+
+One line picks the gripper: `gripper.model` in `config/cell.yaml`, or `UR_GRIPPER=<model>` in front of any
+`run.sh` command. The robot model (URDF), MoveIt's collision exclusions (SRDF), the finger display, the TCP and
+the API's limits all follow it. The tool changer, camera and bracket stay the same.
+
+| model | from | on the real arm | width | force | TCP (flange → closed fingertips) |
+|---|---|---|---|---|---|
+| `rg6` | MIT meshes from [BrettRD/onrobot_grippers](https://github.com/BrettRD/onrobot_grippers) | pendant programs (below) | 0–160 mm | 25–120 N | 0.320 m, **measured** |
+| `robotiq_2f85` | official `ros-jazzy-robotiq-description`, on Robotiq's UR adapter | **not yet**: gripper endpoints answer 501 (mock: simulated) | 0–85 mm | 20–235 N | 0.211 m, **derived** (same changer + adapter + model) |
+
+- Both grippers close their fingers on a linkage, so the finger joint is an angle, not half the width.
+  `config/grippers/<model>.yaml` holds the table between joint angle, width and fingertip depth. It is
+  computed from the model's collision meshes by `tools/gripper_table.py`. The model's widths match the
+  datasheets: 85.0 mm for the 2F-85, and 159 mm vs 160 mm for the RG6.
+- **The RG6 fingertips move 55 mm along the approach axis:** 228 mm below the gripper base fully open, 283 mm
+  closed. The 2F-85's move about 14 mm. The TCP is the closed position, so with open fingers the tips sit
+  higher than the TCP. Grasp planning has to allow for that.
+- **The RG6 mount is anchored to the measured TCP.** The model is 283 mm from base to closed tips, while the
+  sota note gives 1 cm plate + 5 cm changer + 26 cm gripper. The changer cylinder therefore gets the
+  remaining 36.8 mm (`tool.changer_length_m`, `MEASURE`). Measure from the flange to the RG6 housing.
+- The RG6 model's joint range was widened from ±0.628 rad, where it opened only 151 mm, to ±0.90 rad.
+- A new gripper needs four things: a xacro macro `gripper_<model>` in `ros/urdf/grippers/`, a
+  `config/grippers/<model>.yaml`, an include line in `cell_tool.xacro`, and its table from
+  `docker compose exec ros python3 /app/tools/gripper_table.py <model>`.
 
 Before the first run on the **real arm**:
 1. **Remote Control:** in PolyScope, Settings > System > Remote Control, then switch to Remote (top right).
@@ -75,10 +106,10 @@ Before the first run on the **real arm**:
    width with `width_measured: false`, and a grasp counts as successful once the program finishes.
 3. **Network:** the robot must reach this PC, because the driver uses reverse connections on ports
    50001–50004. Set `robot.ip` in `config/cell.yaml`, or pass `UR_ROBOT_IP`.
-4. **Measure the `MEASURE` values in `config/cell.yaml`:** RG6 body and finger size, camera bracket, and
-   **the table height**. These are the collision model; values that are too small let plans pass that touch
-   the real cell. The tool length (0.320 m) and the camera pose (hand-eye calibration, 1.3 mm rms) were
-   measured.
+4. **Measure the `MEASURE` values in `config/cell.yaml`:** the tool changer, camera bracket, and **the table
+   height**. These are the collision model; values that are too small let plans pass that touch the real cell.
+   The tool length (0.320 m) and the camera pose (hand-eye calibration, 1.3 mm rms) were measured. The RG6
+   itself is its 3D model.
 5. **Set the payload on the pendant** (RG6 + changer + camera). The protective-stop sensitivity and the F/T
    readings depend on it.
 
@@ -88,9 +119,10 @@ Before the first run on the **real arm**:
 |---|---|---|
 | joints | 7, `panda_joint1..7` | 6, `shoulder_pan_joint` … `wrist_3_joint`; `joints=`, `j1..j6=` |
 | frame | `panda_link0` | `base_link` (MoveIt's `world` is identical). The **pendant / RTDE `base` frame is `base_link` turned 180° about z** (x and y negated); motion endpoints take `frame=base`, `/state` also returns `ur_base` |
-| TCP | `panda_hand_tcp` | `tcp`, the fingertip centre with the gripper closed, 0.320 m along `tool0` z |
+| TCP | `panda_hand_tcp` | `tcp`, the fingertip centre with the gripper closed: 0.320 m along `tool0` z with the RG6, 0.211 m with the 2F-85 |
 | big-swing guard exempt joint | joint 7 | `wrist_3_joint` |
-| gripper | Franka hand, width 0–0.08 m | RG6: 0–0.160 m, force **25–120 N** (values outside are clamped and the response says so), speed ignored. `gripper_homing` just opens it |
+| gripper | Franka hand, width 0–0.08 m | RG6: 0–0.160 m, force **25–120 N** (values outside are clamped and the response says so), speed ignored. `gripper_homing` just opens it. 2F-85: model only so far (501 on the real arm) |
+| finger joints | two, each half the width | the gripper's one driving joint (`rg6_finger_joint` / `robotiq_85_left_knuckle_joint`), an angle from the width table |
 | gripper width | always measured | measured only with `width_feedback_register` (see above) |
 | force | F_ext estimated from joint torques | the e-series **flange F/T sensor**; extra `/force/zero_sensor` zeroes the sensor itself |
 | `stopped_external_force` | reflex (push / contact) | UR **protective stop** |
@@ -115,7 +147,10 @@ Before the first run on the **real arm**:
   - the scene hash equals the client formula on 200 random scenes;
   - the scene core's batch, rollback and dirty rules hold against a fake MoveIt;
   - IK round trip: 189 random poses, worst 0.1 µm.
-- **Not yet:** the real arm, the real RG6 programs, the Orbbec camera through this API.
+- **2026-10-27, gripper models:** mock hardware, 68 of 68 with each gripper model. RG6 and 2F-85 fingertips
+  pushed 1 cm into the table are reported as colliding (the meshes load), and the TCP is 0.320 / 0.211 m.
+- **Not yet:** the real arm, the real RG6 programs, the Orbbec camera through this API, and URSim with the
+  gripper models.
 
 ## Things learned the hard way (kept in the code comments too)
 
@@ -142,7 +177,8 @@ Before the first run on the **real arm**:
 - **No access control:** there is no token, the same as the Franka API (lab network only). Anyone who can
   reach port 5000 can move the arm.
 - **Collision model:** the fixed scene is one table box (`world_boxes` in `config/cell.yaml`); add walls and a
-  ceiling there for this cell. Tool sizes marked `MEASURE` are estimates.
+  ceiling there for this cell. Tool sizes marked `MEASURE` are estimates. The gripper's own links are excluded
+  from checks against each other and against the changer, camera and wrist.
 - **Motion guards:** every motion endpoint keeps the Franka rules:
   - targets and paths stay away from joint limits;
   - the big-swing guard applies;
