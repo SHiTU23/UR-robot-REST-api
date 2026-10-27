@@ -64,7 +64,7 @@
     <p class="mut">Moves the arm in base_link. Each press is one MoveL; STOP / Esc cancels.</p>
   </section>
   <section>
-    <h2>Gripper (RG6)</h2>
+    <h2 id="g-title">Gripper</h2>
     <div class="row">width <input id="gw" value="0.08"> m <button id="b-open">Open to</button></div>
     <div class="row">force <input id="gf" value="40"> N <button id="b-grasp" class="pri">Grasp</button>
       <button id="b-full">Open fully</button></div>
@@ -157,6 +157,7 @@ async function refresh() {
       pill("p-safety", `safety ${b.safety_mode ?? "n/a"}`, !b.safety_mode || b.safety_mode === "NORMAL" ? "ok" : "bad");
       pill("p-prog", `driver ${b.driver_program_running ? "in control" : "NOT in control"}`, b.driver_program_running ? "ok" : "bad");
       pill("p-lock", b.lock_busy ? "busy" : "idle", b.lock_busy ? "warn" : "");
+      $("g-title").textContent = `Gripper (${b.gripper_name}${b.gripper_backend === "sim" ? ", simulated" : b.gripper_backend === "none" ? ", no control yet" : ""})`;
     }
     if (f.status === 200) {
       const b = f.body;

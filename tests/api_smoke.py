@@ -8,6 +8,7 @@ import argparse
 import io
 import json
 import math
+import os
 import struct
 import sys
 import threading
@@ -16,6 +17,19 @@ import urllib.error
 import urllib.request
 
 FAILS = []
+GM = {}         # the gripper model the API runs (config/grippers/<model>.yaml), set in __main__
+TCP_Z = None    # expected flange -> TCP, from the repo's config files (not from the API)
+
+
+def load_gripper(base):
+    import yaml
+    model = call(base, "GET", "/health")[1]["gripper_model"]
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config")
+    GM.update(yaml.safe_load(open(os.path.join(root, "grippers", model + ".yaml"))))
+    GM["model"] = model
+    cell = yaml.safe_load(open(os.path.join(root, "cell.yaml")))
+    global TCP_Z
+    TCP_Z = cell["tool"]["changer_length_m"] + GM["mount_offset_m"] + GM["table"][-1][2]
 
 
 def call(base, method, path, body=None, raw=None, ctype=None, timeout=120):
@@ -143,10 +157,10 @@ def gripper(B):
     s, r = call(B, "GET", "/control/gripper_open_force?width=0.08")
     check("gripper_open_force", s == 200 and r["success"], f"{s} {r.get('gripper_width_m')} {r.get('notes')}")
     s, r = call(B, "GET", "/control/gripper_grasp?width=0.013&eps_in=0.007&eps_out=0.010&force=20&speed=0.03")
-    check("gripper_grasp (pipeFit params)", s == 200 and r["success"] and r["force"] == 25.0,
+    check("gripper_grasp (pipeFit params)", s == 200 and r["success"] and r["force"] == max(20.0, GM["min_force_n"]),
           f"{s} force {r.get('force')} notes {r.get('notes')} program width {r.get('program_width_cmd')}")
     s, j = call(B, "GET", "/joints")
-    check("/joints gripper width + fingers", j["gripper_width_m"] is not None and len(j["fingers"]) == 2,
+    check("/joints gripper width + fingers", j["gripper_width_m"] is not None and list(j["fingers"]) == [GM["joint"]],
           f"{j['gripper_width_m']} {j['fingers']}")
     for path in ("/control/gripper_open", "/control/gripper_close", "/control/go_to_gripper_state?width=0.05",
                  "/control/gripper_homing"):
@@ -197,16 +211,16 @@ def scene(B):
     s, r = call(B, "POST", "/scene/batch", mesh_body)
     check("scene/batch mesh", s == 200 and r["counts"]["triangles"] == 12, f"{s} {r.get('error')} {r.get('msg')}")
     s, r = call(B, "POST", "/scene/objects/pipefit.test2.part/attach", {})
-    check("attach batch object", s == 200 and r.get("attached_link") == "rg6_body", f"{s} {r.get('error')} {r.get('msg')}")
+    check("attach batch object", s == 200 and r.get("attached_link") == GM["hand_link"], f"{s} {r.get('error')} {r.get('msg')}")
     s, r = call(B, "POST", "/scene/objects/pipefit.test2.part/detach", {})
     check("detach batch object", s == 200 and r.get("attached_link") is None, f"{s} {r.get('error')} {r.get('msg')}")
-    s, r = call(B, "POST", "/scene/acm", {"entries": [{"a": "pipefit.test1.bin", "b": "rg6_left_finger", "allowed": True}]})
+    s, r = call(B, "POST", "/scene/acm", {"entries": [{"a": "pipefit.test1.bin", "b": GM["pad_links"][0], "allowed": True}]})
     check("scene/acm set", s == 200, f"{s} {r.get('error')} {r.get('msg')}")
     s, r = call(B, "GET", "/scene/acm?names=pipefit.test1.bin")
     check("scene/acm get", s == 200 and any(e["client"] for e in r["entries"]), f"{len(r.get('entries', []))} entries")
     s, r = call(B, "DELETE", "/scene/acm")
     check("scene/acm restore", s == 200 and r["removed"], f"{r.get('removed')}")
-    s, r = call(B, "POST", "/scene/padding", {"default_m": 0.005, "links": {"rg6_left_finger": 0.002}})
+    s, r = call(B, "POST", "/scene/padding", {"default_m": 0.005, "links": {GM["pad_links"][0]: 0.002}})
     check("scene/padding", s == 200, f"{s} {r.get('error')} {r.get('msg')}")
     call(B, "POST", "/scene/padding", {"default_m": 0.0})
     s, r = call(B, "GET", "/scene/snapshot?namespace=pipefit")
@@ -258,8 +272,8 @@ def plan(B):
                      "pose": {"position": [0, 0, 0], "orientation": [0.7071068, 0, 0, 0.7071068]}}]}]})
     s, r = call(B, "POST", "/plan/dry_run_sequence", {"gripper_width_m": 0.08, "defaults": {"planner": "LIN"}, "steps": [
         {"plan": {"target": {"type": "pose", "pose": p2}}},
-        {"acm": {"entries": [{"a": "pipefit.seq.tube", "b": "rg6_left_finger", "allowed": True},
-                             {"a": "pipefit.seq.tube", "b": "rg6_right_finger", "allowed": True}]}},
+        {"acm": {"entries": [{"a": "pipefit.seq.tube", "b": GM["pad_links"][0], "allowed": True},
+                             {"a": "pipefit.seq.tube", "b": GM["pad_links"][1], "allowed": True}]}},
         {"gripper_width_m": 0.024}, {"attach": {"id": "pipefit.seq.tube"}},
         {"plan": {"target": {"type": "pose", "pose": pose}}}, {"detach": {"id": "pipefit.seq.tube"}}]})
     check("plan/dry_run_sequence", s == 200 and r["success"] and r["restored"],
@@ -275,7 +289,7 @@ def misc(B):
     s, r = call(B, "GET", "/help")
     check("/help", s == 200 and len(r["endpoints"]) > 60, f"{len(r.get('endpoints', []))} endpoints")
     s, r = call(B, "GET", "/robot/tf?from=tool0&to=tcp")
-    check("/robot/tf tool0->tcp", s == 200 and abs(r["pose"]["position"][2] - 0.32) < 1e-9, f"{r.get('pose')}")
+    check("/robot/tf tool0->tcp", s == 200 and abs(r["pose"]["position"][2] - TCP_Z) < 1e-9, f"{r.get('pose')} want z {TCP_Z}")
     s, r = call(B, "GET", "/robot/description")
     check("/robot/description", s == 200 and "tcp" in r["links"] and r["joint_limits"], f"{len(r.get('links', []))} links")
     s, r = call(B, "GET", "/force")      # mock hardware: no sensor (NaN) -> 503; URSim / real arm: a reading
@@ -338,6 +352,8 @@ if __name__ == "__main__":
         if "safety" not in a.only:
             a.only += ",safety"
     t0 = time.time()
+    load_gripper(a.url.rstrip("/"))
+    print(f"gripper model: {GM['model']}, expected TCP {TCP_Z:.5f} m")
     for g in a.only.split(","):
         print(f"--- {g}", flush=True)
         try:

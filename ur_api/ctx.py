@@ -8,7 +8,7 @@ class Ctx:
     kin = None           # kinematics.Kinematics
     motion = None        # motion.Motion
     dash = None          # dashboard.Dashboard (None with mock hardware)
-    gripper = None       # gripper.RG6Gripper | SimGripper
+    gripper = None       # gripper.RG6Gripper | SimGripper | NoGripper
     force = None         # force.ForceMonitor
     payload = None       # payload.PayloadIdentifier
     camera = None        # camera backend

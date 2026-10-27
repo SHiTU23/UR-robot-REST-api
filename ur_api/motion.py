@@ -105,8 +105,9 @@ class Motion:
             names += list(self.cell.arm_joints)
             pos += [float(v) for v in q]
         if width is not None:
-            names.append(self.cell.finger_joint)
-            pos.append(float(width) / 2.0)
+            for n, v in self.cell.finger_q(float(width)).items():
+                names.append(n)
+                pos.append(v)
         st.joint_state = JointState(name=names, position=pos)
         if extra_attached:
             st.attached_collision_objects = list(extra_attached)

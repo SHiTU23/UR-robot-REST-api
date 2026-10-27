@@ -164,7 +164,7 @@ def objects_delete(name):
 
 @bp.route("/scene/objects/<name>/attach", methods=["POST"])
 def objects_attach(name):
-    """Attach the object to a robot link (default rg6_body) so it moves with the gripper and is checked as part
+    """Attach the object to a robot link (default: the gripper's hand link, e.g. rg6_base_link) so it moves with the gripper and is checked as part
     of it: link, touch_links (default the hand, fingers and TCP)."""
     d = _body()
     if name in C.core.objects:            # a /scene/batch object: one confirmed diff in the v2 core
@@ -290,7 +290,7 @@ def scene_padding_get():
 
 @bp.route("/scene/padding", methods=["POST"])
 def scene_padding_post():
-    """Set robot link padding (robot vs world): {default_m: 0.01, links: {"rg6_left_finger": 0.003}, if_version},
+    """Set robot link padding (robot vs world): {default_m: 0.01, links: {"rg6_left_inner_finger": 0.003}, if_version},
     0..0.1 m; persisted and re-applied after a restart. Objects are not padded here."""
     d = _json_body()
     if not isinstance(d, dict) or "default_m" not in d:

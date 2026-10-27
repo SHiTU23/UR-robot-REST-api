@@ -1,8 +1,9 @@
 """Everything cell-specific in one place: config/cell.yaml (+ environment overrides), joint and link names,
-frames. The rest of the API asks this object instead of hard-coding UR or RG6 names."""
+frames. The rest of the API asks this object instead of hard-coding UR or gripper names."""
 import math
 import os
 
+import numpy as np
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,24 +23,38 @@ class Cell:
         self.arm_joints = [p + n for n in ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                                            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")]
         self.n_joints = len(self.arm_joints)
-        self.finger_joint = p + "rg6_finger_joint"
-        self.finger_joints = [p + "rg6_finger_joint", p + "rg6_right_finger_joint"]
+        # the gripper model (config/grippers/<model>.yaml), chosen as in the URDF: env UR_GRIPPER, else cell.yaml
+        self.gripper_model = os.environ.get("UR_GRIPPER") or g.get("model", "rg6")
+        with open(os.path.join(ROOT, "config", "grippers", self.gripper_model + ".yaml")) as f:
+            gm = yaml.safe_load(f)
+        self.gripper_spec = gm
+        self.finger_joint = p + gm["joint"]       # the driving joint; the other finger joints mimic it
+        self.finger_joints = [self.finger_joint]
+        rows = sorted(gm["table"], key=lambda r: r[1])          # by width, for np.interp
+        self._tw = [float(r[1]) for r in rows]
+        self._tj = [float(r[0]) for r in rows]
+        self._tt = [float(r[2]) for r in rows]
         self.group = "ur_manipulator"
         self.base_frame = p + "base_link"          # the API's frame
         self.planning_frame = "world"              # MoveIt's (the URDF root, identical to base_link); set at startup
         self.tcp_link = p + "tcp"
         self.flange_link = p + "tool0"
-        self.hand_link = p + "rg6_body"
-        self.hand_links = [p + n for n in ("rg6_body", "rg6_left_finger", "rg6_right_finger", "tcp")]
+        self.hand_link = p + gm["hand_link"]
+        self.hand_links = [p + n for n in gm["links"]] + [p + "tcp"]
         self.wrench_topic = "/force_torque_sensor_broadcaster/wrench"
         self.wrench_frame = p + "tool0"
         self.home_q = [float(v) for v in r["home_joints_rad"]]
         self.limit_margin = float(r.get("joint_limit_margin_rad", 0.02))
         self.max_travel_rad = math.radians(float(r.get("max_joint_travel_deg", 100)))
         self.travel_exempt = tuple(p + n for n in r.get("travel_exempt_joints", ["wrist_3_joint"]))
-        self.tcp_z = float(t["tcp_z_m"])
-        self.gripper = g
-        self.max_width = float(g["max_width_m"])
+        # TCP = closed fingertip centre: changer + the model's mount offset + closed tip depth (last table row)
+        self.tcp_z = float(t["changer_length_m"]) + float(gm["mount_offset_m"]) + float(gm["table"][-1][2])
+        # the model's limits; cell.yaml's gripper section (control settings) on top
+        self.gripper = {k: gm[k] for k in ("max_width_m", "min_force_n", "max_force_n", "default_force_n")}
+        self.gripper.update(g)
+        self.gripper["model"] = self.gripper_model
+        self.gripper["name"] = gm["name"]
+        self.max_width = float(self.gripper["max_width_m"])
         self.open_threshold = float(g.get("open_threshold_m", 0.03))
         self.world_boxes = self.cfg.get("world_boxes") or []
         self.builtin_world = tuple(b["name"] for b in self.world_boxes)
@@ -50,6 +65,14 @@ class Cell:
         # wrist_3 (tool roll) cheapest, so it takes the yaw and the big joints stay put.
         self.ik_weights = (2.0, 1.5, 2.0, 1.0, 1.0, 0.15)
         self.ik_limit_margin = 0.05
+
+    def finger_q(self, width):
+        """{driving finger joint: value} for a gripper width (m), through the model's table."""
+        return {self.finger_joint: float(np.interp(width, self._tw, self._tj))}
+
+    def tip_depth(self, width):
+        """Fingertip depth below the gripper mount face at this width (m); the TCP is at the closed depth."""
+        return float(np.interp(width, self._tw, self._tt))
 
     def touch_links(self, link):
         """Links allowed to touch an object attached to ``link`` (the hand and fingers by default)."""

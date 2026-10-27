@@ -1,4 +1,4 @@
-"""State, motion, gripper, force, health: the Franka API's robot endpoints for the UR (6 joints, RG6)."""
+"""State, motion, gripper, force, health: the Franka API's robot endpoints for the UR (6 joints, RG6 / 2F-85)."""
 import functools
 import hashlib
 import logging
@@ -189,7 +189,7 @@ def get_joints():
     """Current joint state: the 6 arm joints with position (rad, deg), velocity (rad/s), effort (the driver's
     joint currents/torques), the limits and the distance to the nearest limit (closer than joint_limit_margin_rad
     -> motion endpoints refuse with joint_near_limit). "positions" is the plain 6-list in radians. Also the RG6
-    finger joints (each finger = half the width) and gripper_width_m (+ whether it was measured). Lock-free;
+    driving finger joint (from the gripper model's width table) and gripper_width_m (+ whether it was measured). Lock-free;
     503 until /joint_states arrives."""
     js = C.ros.joint_state(C.cell.arm_joints)
     if js is None:
@@ -208,7 +208,7 @@ def get_joints():
     return jsonify({
         "positions": [j["position_rad"] for j in joints], "positions_deg": [j["position_deg"] for j in joints],
         "joints": joints,
-        "fingers": {} if w is None else {f: w / 2.0 for f in C.cell.finger_joints},
+        "fingers": {} if w is None else C.cell.finger_q(w),
         "gripper_width_m": w, "gripper_width_measured": g["width_measured"],
         "near_limit": [j["name"] for j in joints if j["to_limit_rad"] < C.cell.limit_margin],
         "stamp": max(js[n][4] for n in C.cell.arm_joints), "age_s": round(time.time() - newest, 3)}), 200
@@ -244,7 +244,7 @@ def _gripper_call(width, force, closing, timeout_s, auto_recover, max_retries):
     while attempts <= max_retries:
         attempts += 1
         res = C.gripper.move(width, force, closing=closing, timeout_s=timeout_s)
-        if res["outcome"] in ("success", "stopped"):
+        if res["outcome"] in ("success", "stopped", "not_supported"):
             break
         if not auto_recover or attempts > max_retries:
             break
@@ -651,6 +651,7 @@ def health():
             dash_ok = False
     return jsonify({
         "move_server": bool(move_server), "grasp_server": C.gripper.available(), "gripper_backend": C.gripper.backend,
+        "gripper_model": C.cell.gripper_model, "gripper_name": C.cell.gripper["name"],
         "planner": C.ros.service_ready(GetMotionPlan, "/plan_kinematic_path"),
         "lock_busy": C.lock.locked(), "last_error": last_error(),
         "joint_state_age_s": None if js is None else round(time.time() - max(v[3] for v in js.values()), 3),
@@ -817,7 +818,7 @@ def robot_tf():
     else:
         q = C.motion.current_q()
     w = C.gripper.state()["width_m"] or 0.0
-    extra = {C.cell.finger_joint: w / 2.0}
+    extra = C.cell.finger_q(w)
     root = C.cell.planning_frame
     T = np.linalg.inv(C.kin.urdf.fk(src, C.kin.qdict(q, extra), root)) @ C.kin.urdf.fk(dst, C.kin.qdict(q, extra), root)
     r, p, y = geom.matrix_to_euler(T)

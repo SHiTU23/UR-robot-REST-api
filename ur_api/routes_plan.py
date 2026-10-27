@@ -120,7 +120,7 @@ def interp_check(points, base_state, max_step):
 @bp.route("/plan/check_state", methods=["POST"])
 def check_state():
     """Collision-check one configuration against the current scene, without moving: joints:[6] (rad) or
-    use_current:true, gripper_width_m (total opening, 0..0.160), expect_scene_version. -> valid, contacts
+    use_current:true, gripper_width_m (total opening, 0..max width of the gripper model), expect_scene_version. -> valid, contacts
     [{a, b, depth_m, point}], joints, joint_limit_margin_ok, scene_version. No motion lock."""
     d = _body()
     _check_version(d)
@@ -360,7 +360,7 @@ def _virtual_attached(q, width, attached):
 
 
 def _link_T(q, link, width):
-    return C.kin.fk(q, link, extra={C.cell.finger_joint: (width or 0.0) / 2.0})
+    return C.kin.fk(q, link, extra=C.cell.finger_q(width or 0.0))
 
 
 @bp.route("/plan/dry_run_sequence", methods=["POST"])

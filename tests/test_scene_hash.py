@@ -53,7 +53,7 @@ class Cell:
     builtin_world = ("table",)
 
     def touch_links(self, link):
-        return [link, "rg6_body"]
+        return [link, "rg6_base_link"]
 
 
 class FakeIO:

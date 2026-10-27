@@ -1,4 +1,4 @@
-"""OnRobot RG6 on the UR, driven like ~/sota/ui/robot.py drives it on the real arm:
+"""The gripper. OnRobot RG6 on the UR, driven like ~/sota/ui/robot.py drives it on the real arm:
 
   1. write the target width (mm) and force (N) into RTDE input registers (rtde_regs: a session that claims
      only those registers -- ur_rtde's RTDEIOInterface also claims fields the ROS driver holds and is refused);
@@ -13,7 +13,8 @@
 
 The gripper's real width is known only if the programs write it into an output register
 (gripper.width_feedback_register in cell.yaml); otherwise the commanded width is reported, marked
-width_measured=false. SimGripper is the same interface without hardware (mock hardware / tests).
+width_measured=false. SimGripper is the same interface without hardware (mock hardware / tests); NoGripper
+answers 501 for a gripper model with no control yet (Robotiq 2F-85 on the real arm).
 """
 import threading
 import time
@@ -22,7 +23,7 @@ from dashboard import DashboardError
 from rtde_regs import RTDEError
 
 OUTCOME_STATUS = {"success": 200, "action_timeout": 504, "server_unreachable": 503, "action_failed": 500,
-                  "recovery_failed": 500, "stopped": 200}
+                  "recovery_failed": 500, "stopped": 200, "not_supported": 501}
 
 
 class GripperResult(dict):
@@ -36,6 +37,7 @@ class _Base:
         self.max_width = float(g["max_width_m"])
         self.min_force, self.max_force = float(g["min_force_n"]), float(g["max_force_n"])
         self.default_force = float(g["default_force_n"])
+        self.name = g.get("name", "gripper")
         self.width = None              # last known width, m
         self.width_measured = False
         self.lock = threading.Lock()
@@ -45,11 +47,11 @@ class _Base:
         notes = []
         w = min(max(float(width), 0.0), self.max_width)
         if abs(w - width) > 1e-9:
-            notes.append(f"width {width:.4f} m clamped to the RG6 range 0..{self.max_width:.3f} m")
+            notes.append(f"width {width:.4f} m clamped to the {self.name} range 0..{self.max_width:.3f} m")
         f = self.default_force if force is None else float(force)
         fc = min(max(f, self.min_force), self.max_force)
         if abs(fc - f) > 1e-9:
-            notes.append(f"force {f:.1f} N clamped to the RG6 range {self.min_force:.0f}..{self.max_force:.0f} N")
+            notes.append(f"force {f:.1f} N clamped to the {self.name} range {self.min_force:.0f}..{self.max_force:.0f} N")
         return w, fc, notes
 
     def _set_width(self, w, measured):
@@ -59,7 +61,7 @@ class _Base:
 
     def state(self):
         return {"width_m": self.width, "width_measured": self.width_measured, "type": self.cell.gripper["type"],
-                "backend": self.backend}
+                "model": self.cell.gripper_model, "backend": self.backend}
 
     def stop(self):
         self.stop_event.set()
@@ -82,6 +84,24 @@ class SimGripper(_Base):
 
     def available(self):
         return True
+
+
+class NoGripper(_Base):
+    """A gripper model without control on the real arm yet (Robotiq 2F-85): every action answers 501, so a
+    client never takes a grasp for done. The model still shows the fingers open."""
+    backend = "none"
+
+    def __init__(self, cell, ros):
+        super().__init__(cell, ros)
+        self._set_width(self.max_width, False)
+
+    def move(self, width, force=None, closing=False, timeout_s=None):
+        return GripperResult(outcome="not_supported", width_m=self.width, force_n=force, notes=[], program=None,
+                             elapsed_s=0.0, error=f"no control for the {self.name} on the real arm yet "
+                                                  "(gripper.model in config/cell.yaml / env UR_GRIPPER)")
+
+    def available(self):
+        return False
 
 
 class RG6Gripper(_Base):
@@ -212,4 +232,6 @@ class RG6Gripper(_Base):
 def make_gripper(cell, ros, dashboard, mock):
     if mock or cell.gripper.get("type") == "sim":
         return SimGripper(cell, ros)
-    return RG6Gripper(cell, ros, dashboard)
+    if cell.gripper_model == "rg6":
+        return RG6Gripper(cell, ros, dashboard)
+    return NoGripper(cell, ros)

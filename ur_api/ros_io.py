@@ -67,7 +67,7 @@ class RosIO:
         n.create_subscription(String, "/robot_description_semantic", self._on_srdf, _latched(), callback_group=cb)
         from rcl_interfaces.msg import Log
         n.create_subscription(Log, "/rosout", self._on_rosout, 100, callback_group=cb)
-        self.width_pub = n.create_publisher(Float64, "/rg6/width", _latched())
+        self.width_pub = n.create_publisher(Float64, "/gripper/width", _latched())
         self.display_pub = n.create_publisher(DisplayTrajectory, "/display_planned_path", 5)
         self.marker_pub = n.create_publisher(MarkerArray, "/ur_ee_force", 2)
         # MoveGroupInterface::stop() publishes "stop" here; the trajectory execution manager then cancels the

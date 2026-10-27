@@ -1,5 +1,5 @@
 """UR REST API: the HTTP contract of XiaoxiaoZ's Franka-Emika-Panda-robot-REST-api, for a UR arm with an
-OnRobot RG6, on ROS 2 Jazzy + MoveIt 2 (ur_robot_driver).
+OnRobot RG6 or Robotiq 2F-85, on ROS 2 Jazzy + MoveIt 2 (ur_robot_driver).
 
     python3 ur_api/server.py          # after ros/launch/cell.launch.py is up (same ROS_DOMAIN_ID)
 
@@ -70,7 +70,7 @@ def _motion_gate():
 
 @app.route("/", methods=["GET"])
 def banner():
-    return jsonify({"data": f"Hello, this is {C.cell.ur_type.upper()} with an OnRobot RG6 (UR REST API)",
+    return jsonify({"data": f"Hello, this is {C.cell.ur_type.upper()} with an {C.cell.gripper['name']} (UR REST API)",
                     "help": "GET /help for a full API usage guide", "mock_hardware": C.mock}), 200
 
 
@@ -88,7 +88,7 @@ def api_help():
     eps.sort(key=lambda e: e["path"])
     n = C.cell.n_joints
     return jsonify({
-        "name": f"{C.cell.ur_type.upper()} + OnRobot RG6 REST API (Franka Emika Panda REST API contract)",
+        "name": f"{C.cell.ur_type.upper()} + {C.cell.gripper['name']} REST API (Franka Emika Panda REST API contract)",
         "quickstart": [
             "GET /state for the TCP pose and gripper; GET /joints for joint angles, velocities, efforts and limits.",
             "GET /force for the flange F/T sensor wrench.",
@@ -114,8 +114,7 @@ def api_help():
                         "plan_too_large | execute_failed | recovery_failed | stopped | stopped_external_force "
                         "(UR protective stop) | stopped_user_button (emergency / safeguard stop) (+ attempts, "
                         "recovery_* fields)",
-            "gripper": "OnRobot RG6 via pendant programs (RTDE registers + dashboard); 0..0.160 m, 25..120 N; the "
-                       "driver regains control after every gripper action"},
+            "gripper": _gripper_note(C.cell, C.gripper)},
         "endpoints": eps,
         "readme": "https://github.com/SHiTU23/UR-robot-REST-api"}), 200
 
@@ -138,6 +137,16 @@ def _root_link(urdf):
     return roots[0] if roots else C.cell.base_frame
 
 
+def _gripper_note(cell, gripper):
+    g = cell.gripper
+    how = {"rg6": "via pendant programs (RTDE registers + dashboard); the driver regains control after every "
+                  "gripper action",
+           "sim": "SIMULATED (mock hardware, or no control for this gripper yet): the fingers only move in the model",
+           "none": "NOT CONTROLLABLE on this arm yet: gripper endpoints answer 501"}.get(gripper.backend, gripper.backend)
+    return (f"{g['name']} ({cell.gripper_model}), {how}; 0..{g['max_width_m']:.3f} m, "
+            f"{g['min_force_n']:.0f}..{g['max_force_n']:.0f} N")
+
+
 def _builtin_tool(cell):
     """The tool parts as listed by /scene/info and /scene/objects (they are URDF links, see cell_tool.xacro)."""
     t = cell.cfg["tool"]
@@ -146,13 +155,13 @@ def _builtin_tool(cell):
     for oid, link, shape, est in (
             ("tool_changer", "tool_changer", {"type": "cylinder", "radius": t["changer_radius_m"],
                                               "length": t["changer_length_m"]}, True),
-            ("rg6_body", "rg6_body", {"type": "box", "size": t["body_size_m"]}, True),
-            ("rg6_left_finger", "rg6_left_finger", {"type": "box", "size": t["finger_size_m"]}, True),
-            ("rg6_right_finger", "rg6_right_finger", {"type": "box", "size": t["finger_size_m"]}, True),
             ("wrist_camera", "wrist_camera", {"type": "box", "size": t["camera_box_m"]}, False),
             ("camera_bracket", "camera_bracket", {"type": "box", "size": t["bracket_size_m"]}, True)):
         out.append({"id": oid, "link": cell.prefix + link, "frame_id": cell.prefix + link, "pose": ident,
                     "shapes": [dict(shape, pose=ident)], "estimated": est, "in_urdf": True})
+    for link in cell.gripper_spec["links"]:      # gripper: mesh links of its model (shapes: GET /robot/description)
+        out.append({"id": link, "link": cell.prefix + link, "frame_id": cell.prefix + link, "pose": ident,
+                    "shapes": [], "model": cell.gripper_model, "estimated": False, "in_urdf": True})
     return out
 
 
