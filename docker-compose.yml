@@ -48,5 +48,7 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
       DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+    devices: ["/dev/dri:/dev/dri"]           # GPU for OpenGL; without it the window stays blank
     volumes: ["./:/app", "/tmp/.X11-unix:/tmp/.X11-unix"]
     command: ros2 run rviz2 rviz2 -d /app/ros/rviz/cell.rviz
