@@ -139,7 +139,10 @@ function showBusy(text) {
   e.textContent = text || "idle";
   e.className = "pill" + (text ? " running" : "");
 }
+let missWidth = null;      // the finger width when the "object missed" warning went up
+function clearMissed() { $("g-warn").textContent = ""; missWidth = null; }
 async function act(label, path, opts) {
+  if (path.includes("gripper")) clearMissed();
   const locking = path !== "/control/stop" && (path.startsWith("/control/") || path === "/recover" || path.startsWith("/robot/home"));
   log(`${label} …`);
   if (locking) { localAction = { label, t0: Date.now() }; showBusy(label); }
@@ -181,7 +184,9 @@ $("b-open").onclick = () => { const mm = parseFloat($("gw").value);
 $("b-full").onclick = () => act("open", "/control/gripper_open");
 $("b-close").onclick = () => act("close", "/control/gripper_close");
 $("b-grasp").onclick = () => act("grasp", `/control/gripper_grasp?force=${$("gf").value}`).then((b) => {
-  $("g-warn").textContent = b.object_held === false ? `OBJECT MISSED: ${b.error_msg || ""}` : ""; });
+  const missed = b.object_held === false && b.outcome === "object_missed";
+  $("g-warn").textContent = missed ? `OBJECT MISSED: ${b.error_msg || ""}` : "";
+  missWidth = missed ? b.gripper_width_m : null; });
 $("b-goto").onclick = () => act("goto", `/control/goto_joints?joints=${$("gj").value}&unit=deg`);
 $("b-dry").onclick = async () => { const r = await act("dry run", `/control/goto_joints?joints=${$("gj").value}&unit=deg&dry_run=1`);
   if (r.duration_s) log(`  planner ${r.planner_used}, ${fmt(r.duration_s, 1)} s, travel ${JSON.stringify(r.joint_travel_deg)}`); };
@@ -201,6 +206,8 @@ async function refresh() {
       const P = $("ubase").checked ? { x: s.body.ur_base.position[0], y: s.body.ur_base.position[1], z: s.body.ur_base.position[2] }
                                    : s.body.position;
       const r = s.body.rpy_deg, held = s.body.object_held;
+      // the fingers moved some other way (another page, the API): the warning is out of date
+      if (missWidth !== null && Math.abs((s.body.gripper_width_m ?? missWidth) - missWidth) > 0.002) clearMissed();
       pill("p-obj", held === true ? "object held" : held === false ? "no object" : "object not confirmed", held === true ? "ok" : held === false ? "" : "warn");
       rows($("state"), [["TCP x y z (m)", `${fmt(P.x)} ${fmt(P.y)} ${fmt(P.z)} ${$("ubase").checked ? "(base)" : "(base_link)"}`],
         ["roll pitch yaw (°)", `${fmt(r.roll, 1)} ${fmt(r.pitch, 1)} ${fmt(r.yaw, 1)}`],
