@@ -8,7 +8,12 @@ links: [rg6_base_link, rg6_left_outer_knuckle, rg6_left_inner_knuckle, rg6_left_
         rg6_right_outer_knuckle, rg6_right_inner_knuckle, rg6_right_inner_finger]
 pad_links: [rg6_left_inner_finger, rg6_right_inner_finger]
 closing_axis_in_mount: y                # the model's fingers close along its base y (mounted turned to tool0 x)
-mount_offset_m: 0.0                     # the model's base link is its mounting face
+# The third-party model is 283.2 mm from base to closed fingertips, the real RG6 about 261 mm. This shifts it so the
+# fingertips are right (TCP 322 mm): the body sits 22.2 mm too close to the flange, and which part is too long is unknown.
+mount_offset_m: -0.0222
+# From the TCP calibration on this arm (pendant TCP hand_eye_tcp, 2026-11-02): how far the fingertip centre sits off
+# the flange axis, tool0 x and y. Both the gripper and the TCP shift by it. Pendant z was 0.322, rotation 0.
+tcp_xy_m: [-0.00407, -0.00519]
 max_width_m: 0.160                      # datasheet stroke 0-160 mm (the model reaches 159 mm, see the table)
 min_force_n: 25.0                       # datasheet force range 25-120 N
 max_force_n: 120.0

@@ -275,11 +275,13 @@ class Motion:
         return travel, {j: round(t, 3) for j, t in travel.items() if limit_rad and t > limit_rad
                         and j not in self.cell.travel_exempt}
 
-    def display(self, traj):
+    def display(self, traj, start_state=None):
+        """Publish a plan for RViz's Planned Path display. It starts from start_state, by default the current one."""
         from moveit_msgs.msg import DisplayTrajectory
         try:
             d = DisplayTrajectory()
             d.trajectory = [traj]
+            d.trajectory_start = start_state or self.robot_state()
             self.ros.display_pub.publish(d)
         except Exception:      # noqa: BLE001
             pass

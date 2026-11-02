@@ -61,7 +61,8 @@
   <xacro:arg name="simulation_controllers" default="" />
 
   <!-- initial position for simulations (Mock Hardware, Gazebo, Ignition) -->
-  <xacro:arg name="initial_positions_file" default="$(find ur_description)/config/initial_positions.yaml"/>
+  <!-- the mock robot starts here, not stretched out; the real arm always reports its real joints -->
+  <xacro:arg name="initial_positions_file" default="/app/config/start_pose.yaml"/>
 
   <!-- convert to property to use substitution in function -->
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>

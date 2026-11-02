@@ -3,7 +3,7 @@ OnRobot RG6 or Robotiq 2F-85, on ROS 2 Jazzy + MoveIt 2 (ur_robot_driver).
 
     python3 ur_api/server.py          # after ros/launch/cell.launch.py is up (same ROS_DOMAIN_ID)
 
-Environment: UR_API_HOST (0.0.0.0), UR_API_PORT (5000), UR_MOCK_HARDWARE=1 (no robot: simulated gripper, no
+Environment: UR_API_HOST (127.0.0.1: this PC only; see README, Access), UR_API_PORT (5000), UR_API_TOKEN, UR_MOCK_HARDWARE=1 (no robot: simulated gripper, no
 dashboard), UR_ROBOT_IP, UR_CAMERA, UR_CELL_CONFIG, UR_STATE_DIR (scene state), UR_FILES_ROOT (+ _MAX_BYTES,
 _QUOTA_BYTES), UR_API_TEST_HOOKS=1 (scene failure injection; never in production).
 """
@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, jsonify, request  # noqa: E402
 
+import auth  # noqa: E402
 from ctx import C  # noqa: E402
 from errors import ApiError  # noqa: E402
 
@@ -26,6 +27,11 @@ log = logging.getLogger("ur_rest_api")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__)
+
+
+app.before_request(auth.gate)
+app.add_url_rule("/login", "login", auth.login, methods=["POST"])
+app.add_url_rule("/logout", "logout", auth.logout, methods=["POST"])
 
 
 @app.errorhandler(ApiError)
@@ -42,6 +48,9 @@ def _unhandled(e):
     return jsonify({"error": type(e).__name__, "message": str(e)}), 500
 
 
+DRY_RUN_PATHS = {"/control/goto_joints", "/control/plan_cartesian_path", "/control/rotate_tcp"}
+
+
 # Safety gate for every motion endpoint (rules S2 + S4): refuse while the scene is dirty (a commit could not
 # be confirmed or rolled back) and when the caller's expect_scene_version is stale. /control/stop always
 # passes, and dry runs do not move.
@@ -50,8 +59,14 @@ def _motion_gate():
     p = request.path
     if not p.startswith("/control/") or p == "/control/stop":
         return None
-    if request.args.get("dry_run", "0") not in ("0", "false", ""):
+    # only where dry_run is honoured: anywhere else it must not get a real move past these checks
+    if p in DRY_RUN_PATHS and request.args.get("dry_run", "0") not in ("0", "false", ""):
         return None
+    if request.args.get("require_object", "0") not in ("0", "false", "") and C.gripper.holding is not True:
+        return jsonify({"error": "object_not_held", "object_held": C.gripper.holding,
+                        "msg": "refusing to move: this motion has require_object=1 and no object is confirmed in the "
+                               "gripper (object_held false = the last grasp missed or the gripper opened; null = "
+                               "the gripper has no width feedback)"}), 409
     if C.core.dirty:
         return jsonify({"error": "scene_dirty", "msg": "the planning scene is in an unconfirmed state; push a "
                         "successful /scene/batch or DELETE /scene/namespaces/<ns> first",
@@ -106,8 +121,13 @@ def api_help():
             "units": "metres, newtons, N*m, radians (unit=deg where offered); positions absolute",
             "frames": f"{C.cell.base_frame} (ROS). The pendant / RTDE 'base' frame is base_link turned 180 deg about "
                       "z (x and y negated); motion endpoints take frame=base to use it",
-            "tcp": f"{C.cell.tcp_link}: fingertip centre with the gripper closed, {C.cell.tcp_z:.3f} m along tool0 z",
+            "tcp": f"{C.cell.tcp_link}: fingertip centre with the gripper closed, {C.cell.tcp_z:.3f} m along tool0 z, "
+                   f"x {C.cell.tcp_xy[0]:+.5f} y {C.cell.tcp_xy[1]:+.5f} m off the flange axis",
             "joints": C.cell.arm_joints,
+            "access": "every endpoint except /, /ui, /login and /control/stop needs 'Authorization: Bearer <token>'",
+            "grasp_check": "gripper_grasp returns object_held (true, false, or null without width feedback) and "
+                           "outcome object_missed; add require_object=1 to a motion so it refuses unless object_held "
+                           "is true (dry runs are not refused)",
             "concurrency": "motion/gripper endpoints share one non-blocking lock -> 409 'Robot is busy' instead of "
                            "queuing; /state /joints /force /health /control/stop are lock-free",
             "outcomes": "motion endpoints return outcome: success | plan_failed | plan_would_violate_limits | "
@@ -227,6 +247,8 @@ def build():
     C.camera = make_camera(cell.camera)
     state_dir = os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state"))
     os.makedirs(state_dir, exist_ok=True)
+    C.home_path = os.path.join(state_dir, "home.json")
+    cell.load_saved_home(C.home_path)
     C.store = FileStore(os.environ.get("UR_FILES_ROOT", os.path.join(ROOT, "data")),
                         max_file_bytes=int(os.environ.get("UR_FILES_MAX_BYTES", 100 * 2 ** 20)),
                         quota_bytes=int(os.environ.get("UR_FILES_QUOTA_BYTES", 2 * 2 ** 30)))
@@ -257,9 +279,12 @@ def register():
 
 
 def main():
+    auth.load_token(os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state")))
     build()
     register()
-    host, port = os.environ.get("UR_API_HOST", "0.0.0.0"), int(os.environ.get("UR_API_PORT", "5000"))
+    host, port = os.environ.get("UR_API_HOST", "127.0.0.1"), int(os.environ.get("UR_API_PORT", "5000"))
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        log.warning("listening on %s: the token and all commands cross that network unencrypted", host)
 
     def hard_stop(*_):
         try:

@@ -1,5 +1,6 @@
 """Everything cell-specific in one place: config/cell.yaml (+ environment overrides), joint and link names,
 frames. The rest of the API asks this object instead of hard-coding UR or gripper names."""
+import json
 import math
 import os
 
@@ -19,7 +20,7 @@ class Cell:
         p = os.environ.get("UR_TF_PREFIX", "")
         self.prefix = p
         self.ur_type = r["ur_type"]
-        self.robot_ip = os.environ.get("UR_ROBOT_IP", r["ip"])
+        self.robot_ip = os.environ.get("UR_ROBOT_IP") or r["ip"]    # compose passes it empty when unset
         self.arm_joints = [p + n for n in ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                                            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")]
         self.n_joints = len(self.arm_joints)
@@ -43,12 +44,15 @@ class Cell:
         self.hand_links = [p + n for n in gm["links"]] + [p + "tcp"]
         self.wrench_topic = "/force_torque_sensor_broadcaster/wrench"
         self.wrench_frame = p + "tool0"
-        self.home_q = [float(v) for v in r["home_joints_rad"]]
+        self.config_home_q = [float(v) for v in r["home_joints_rad"]]
+        self.home_q = list(self.config_home_q)     # replaced by a saved home: load_saved_home, POST /robot/home
+        self.home_saved_at = None
         self.limit_margin = float(r.get("joint_limit_margin_rad", 0.02))
         self.max_travel_rad = math.radians(float(r.get("max_joint_travel_deg", 100)))
         self.travel_exempt = tuple(p + n for n in r.get("travel_exempt_joints", ["wrist_3_joint"]))
         # TCP = closed fingertip centre: changer + the model's mount offset + closed tip depth (last table row)
         self.tcp_z = float(t["changer_length_m"]) + float(gm["mount_offset_m"]) + float(gm["table"][-1][2])
+        self.tcp_xy = [float(v) for v in gm.get("tcp_xy_m", [0.0, 0.0])]   # calibrated offset from the flange axis
         # the model's limits; cell.yaml's gripper section (control settings) on top
         self.gripper = {k: gm[k] for k in ("max_width_m", "min_force_n", "max_force_n", "default_force_n")}
         self.gripper.update(g)
@@ -59,12 +63,28 @@ class Cell:
         self.world_boxes = self.cfg.get("world_boxes") or []
         self.builtin_world = tuple(b["name"] for b in self.world_boxes)
         self.camera = dict(self.cfg.get("camera") or {})
-        self.camera["backend"] = os.environ.get("UR_CAMERA", self.camera.get("backend", "none"))
+        self.camera["backend"] = os.environ.get("UR_CAMERA") or self.camera.get("backend", "none")   # compose passes it empty when unset
         self.joint_limits = {}                     # name -> (lo, hi), from the URDF at startup
         # IK: base / shoulder / elbow moves are what bystanders see as "big"; the wrists are cheap and
         # wrist_3 (tool roll) cheapest, so it takes the yaw and the big joints stay put.
         self.ik_weights = (2.0, 1.5, 2.0, 1.0, 1.0, 0.15)
         self.ik_limit_margin = 0.05
+
+    def load_saved_home(self, path):
+        """Use the home pose saved with POST /robot/home, if there is a valid one; otherwise the cell.yaml one."""
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            q = [float(v) for v in d["joints_rad"]]
+            if len(q) != self.n_joints or not all(math.isfinite(v) for v in q) or d.get("ur_type") != self.ur_type:
+                raise ValueError("wrong joints or robot type")
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            import logging
+            logging.getLogger("ur_rest_api").error("ignoring the saved home in %s: %s", path, e)
+            return
+        self.home_q, self.home_saved_at = q, d.get("saved_at")
 
     def finger_q(self, width):
         """{driving finger joint: value} for a gripper width (m), through the model's table."""

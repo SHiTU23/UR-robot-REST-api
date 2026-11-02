@@ -18,11 +18,10 @@ tool:
   # TCP = fingertip centre with the gripper closed. It is not set here: it follows from the gripper model,
   # flange -> changer_length_m -> gripper mount face -> closed fingertips (config/grippers/<model>.yaml table).
   finger_axis: x                   # the fingers close along tool0 x (re-checked 2026-09-16)
-  changer_radius_m: 0.0375         # MEASURE: flange plate + tool changer as one cylinder
-  # Derived 2026-10-27: the measured TCP 0.320 m (sota UI, 2026-09-16, gripper closed) minus the RG6 model's
-  # closed tip depth 0.2832 m. The sota note says 1 cm plate + 5 cm changer + 26 cm gripper, i.e. the model's
-  # base probably includes part of the quick changer. MEASURE flange -> RG6 housing to settle it.
-  changer_length_m: 0.0368
+  changer_radius_m: 0.0375         # MEASURE: flange + tool changer as one cylinder (radius only; its length is known)
+  # Told by the operator 2026-11-02: flange 10 mm + tool changer parts 51 mm = 61 mm, the same for every gripper.
+  # The RG6 is then 261 mm to its closed fingertips, TCP 322 mm (config/grippers/rg6.yaml has the model correction).
+  changer_length_m: 0.061
   # Wrist camera (Orbbec Gemini 2, serial AY6KC52002D): pose from the hand-eye calibration of
   # 2026-09-15 (~/sota/ui/calibration/hand_eye.json, 9 samples, 1.3 mm rms), as T_tool0_camera.
   camera_xyz_m: [-0.06705131293308766, -0.11714507665028767, 0.10717890409021669]
@@ -54,7 +53,7 @@ gripper:
 # MEASURE before trusting it: the sota UI's safe box (2026-09-16, freedrive probe of the TCP) was
 # x -0.70..0.02, y -0.62..0.20, z -0.12..0.35 in the pendant "base" frame = x -0.02..0.70, y -0.20..0.62 here.
 world_boxes:
-  - {name: table, size: [2.0, 2.0, 0.04], center: [0.0, 0.0, -0.160]}   # MEASURE: top at z = -0.14 (TCP floor -0.12 probed)
+  - {name: floor, size: [8.0, 8.0, 0.1], center: [0.0, 0.0, -0.052]}   # the arm stands on the floor; top 2 mm below the base so the base itself does not count as a collision
 
 camera:
   backend: orbbec                  # orbbec | realsense | none (env UR_CAMERA wins)
