@@ -1,0 +1,7 @@
+# The pose the mock robot starts in, read from the real arm 2026-11-02 12:20 by tools/save_start_pose.py. Radians.
+shoulder_pan_joint: 4.211897
+shoulder_lift_joint: -0.818786
+elbow_joint: -2.250448
+wrist_1_joint: -1.626088
+wrist_2_joint: 1.566475
+wrist_3_joint: 0.739207

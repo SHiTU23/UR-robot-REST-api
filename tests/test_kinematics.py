@@ -33,7 +33,9 @@ class TestKinematics(unittest.TestCase):
         self.assertLess(np.abs(self.kin.T_bl_dh - geom.rot_z(math.pi)).max(), 1e-9)
 
     def test_tcp_offset(self):
-        self.assertAlmostEqual(self.kin.T_tool0_tcp[2, 3], 0.320, places=9)
+        self.assertAlmostEqual(self.kin.T_tool0_tcp[2, 3], 0.322, places=9)
+        self.assertAlmostEqual(self.kin.T_tool0_tcp[0, 3], -0.00407, places=9)
+        self.assertAlmostEqual(self.kin.T_tool0_tcp[1, 3], -0.00519, places=9)
 
     def test_round_trip(self):
         rng = np.random.default_rng(1)

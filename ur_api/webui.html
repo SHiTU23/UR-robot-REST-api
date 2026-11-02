@@ -33,6 +33,11 @@
   #log { font:12px ui-monospace, monospace; white-space:pre-wrap; max-height:220px; overflow:auto; color:var(--mut); }
   img.cam { width:100%; border-radius:6px; background:#000; min-height:120px; }
   .mut { color:var(--mut); font-size:12px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #p-lock.running { background:var(--warn); border-color:var(--warn); color:#fff; font-weight:700; font-size:14px; padding:4px 12px; }
+  #p-lock.running::before { content:""; display:inline-block; width:10px; height:10px; margin-right:7px; border:2px solid #fff;
+    border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -42,6 +47,7 @@
   <span class="pill" id="p-safety">safety ?</span>
   <span class="pill" id="p-prog">program ?</span>
   <span class="pill" id="p-lock">idle</span>
+  <span class="pill" id="p-obj">object ?</span>
   <button id="stop" title="Esc">STOP</button>
 </header>
 <main>
@@ -49,6 +55,7 @@
     <h2>State</h2>
     <table id="state"></table>
     <div class="row"><button id="b-recover">Recover</button><button id="b-home">Home</button>
+      <button id="b-sethome">Save current pose as home</button><button id="b-resethome">Reset home</button>
       <label class="mut"><input type="checkbox" id="ubase" style="width:auto"> show pendant "base" frame</label></div>
   </section>
   <section>
@@ -60,15 +67,26 @@
       <button data-j="x+">x +</button><button data-j="y+">y +</button><button data-j="z+">z +</button>
       <button data-j="x-">x −</button><button data-j="y-">y −</button><button data-j="z-">z −</button>
     </div>
+    <h2 style="margin-top:12px">Rotate (TCP stays in place)</h2>
+    <div class="row">step <select id="rstep"><option>1</option><option>2</option><option selected>5</option>
+      <option>10</option><option>15</option></select> ° &nbsp; about <select id="rframe" style="width:auto">
+      <option value="base_link">base axes</option><option value="tool">tool axes</option></select></div>
+    <div class="jog">
+      <button data-r="x+">rot x +</button><button data-r="y+">rot y +</button><button data-r="z+">rot z +</button>
+      <button data-r="x-">rot x −</button><button data-r="y-">rot y −</button><button data-r="z-">rot z −</button>
+    </div>
     <div class="row"><button id="b-down">Point straight down</button></div>
     <p class="mut">Moves the arm in base_link. Each press is one MoveL; STOP / Esc cancels.</p>
   </section>
   <section>
     <h2 id="g-title">Gripper</h2>
-    <div class="row">width <input id="gw" value="0.08"> m <button id="b-open">Open to</button></div>
-    <div class="row">force <input id="gf" value="40"> N <button id="b-grasp" class="pri">Grasp</button>
-      <button id="b-full">Open fully</button></div>
-    <p class="mut">Each action plays a pendant program, then hands control back to the driver (~2–3 s).</p>
+    <div class="row"><button id="b-full">Open</button><button id="b-close">Close</button></div>
+    <div class="row">width <input id="gw" type="number" min="0" max="160" step="1" value="80"> mm
+      <button id="b-open">Go to width</button></div>
+    <div class="row">force <input id="gf" type="number" min="25" max="120" step="5" value="40"> N
+      <button id="b-grasp" class="pri">Grasp</button></div>
+    <p class="mut">Each action plays a pendant program, then hands control back to the driver, so it takes several seconds. The arm cannot move until it finishes.</p>
+    <p id="g-warn" style="color:var(--bad);font-weight:600"></p>
   </section>
   <section>
     <h2>Joints</h2>
@@ -97,16 +115,43 @@
 const $ = (id) => document.getElementById(id);
 const fmt = (v, d = 4) => (v === null || v === undefined || Number.isNaN(v)) ? "–" : Number(v).toFixed(d);
 function log(msg) { const l = $("log"); l.textContent = `${new Date().toLocaleTimeString()}  ${msg}\n` + l.textContent; }
+let asking = false;
+async function login() {
+  if (asking) return;
+  asking = true;
+  const t = prompt("API token (./run.sh token prints it):");
+  if (t) { const r = await fetch("/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: t }) });
+    if (r.status === 200) { location.reload(); return; } alert("Wrong token"); }
+  asking = false;
+}
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
+  if (r.status === 401) login();
   let body; try { body = await r.json(); } catch { body = {}; }
   return { status: r.status, body };
 }
-async function act(label, path) {
+// While an action runs, its buttons are disabled and the header says what it is. STOP stays enabled.
+const ACTIONS = "[data-j],[data-r],#b-open,#b-full,#b-close,#b-grasp,#b-goto,#b-dry,#b-home,#b-sethome,#b-resethome,#b-recover,#b-down";
+let localAction = null;
+function showBusy(text) {
+  document.querySelectorAll(ACTIONS).forEach((b) => { b.disabled = !!text; });
+  const e = $("p-lock");
+  e.textContent = text || "idle";
+  e.className = "pill" + (text ? " running" : "");
+}
+let missWidth = null;      // the finger width when the "object missed" warning went up
+function clearMissed() { $("g-warn").textContent = ""; missWidth = null; }
+async function act(label, path, opts) {
+  if (path.includes("gripper")) clearMissed();
+  const locking = path !== "/control/stop" && (path.startsWith("/control/") || path === "/recover" || path.startsWith("/robot/home"));
   log(`${label} …`);
-  const { status, body } = await api(path);
+  if (locking) { localAction = { label, t0: Date.now() }; showBusy(label); }
+  let status, body;
+  try { ({ status, body } = await api(path, opts)); }
+  finally { if (locking) { localAction = null; showBusy(null); } }
+  if (status === 409 && body.activity) log(`${label}: ignored, still busy: ${body.activity.what}`);
   const o = body.outcome || body.status || body.error || "";
-  log(`${label}: ${status} ${o} ${body.msg || body.error_msg || ""}`);
+  log(`${label}: ${status} ${o} ${body.msg || body.error_msg || (body.outcome ? body.error : "") || ""}`);
   refresh();
   return body;
 }
@@ -114,6 +159,12 @@ $("stop").onclick = () => act("STOP", "/control/stop");
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("stop").click(); });
 $("b-recover").onclick = () => act("recover", "/recover");
 $("b-home").onclick = () => confirm("Move the arm to the home pose?") && act("home", "/control/home");
+$("b-sethome").onclick = () => {
+  if (!last) return;
+  const deg = last.joints.map((v) => (v * 180 / Math.PI).toFixed(1)).join(", ");
+  if (confirm(`Save the current pose as the home pose?\n${deg} deg\nThe arm will not move.`)) act("save home", "/robot/home", { method: "POST" });
+};
+$("b-resethome").onclick = () => confirm("Go back to the home pose from cell.yaml?") && act("reset home", "/robot/home", { method: "DELETE" });
 let last = null;
 document.querySelectorAll("[data-j]").forEach((b) => b.onclick = () => {
   if (!last) return;
@@ -121,17 +172,29 @@ document.querySelectorAll("[data-j]").forEach((b) => b.onclick = () => {
   const p = { ...last.position }; p[ax] += sg * st;
   act(`jog ${b.dataset.j} ${st} m`, `/control/plan_cartesian_path?x=${p.x}&y=${p.y}&z=${p.z}&velocity=${$("vel").value}`);
 });
+document.querySelectorAll("[data-r]").forEach((b) => b.onclick = () => {
+  const ax = b.dataset.r[0], sg = b.dataset.r[1] === "+" ? 1 : -1, st = parseFloat($("rstep").value), fr = $("rframe").value;
+  act(`rotate ${b.dataset.r} ${st}° (${fr})`, `/control/rotate_tcp?axis=${ax}&deg=${sg * st}&frame=${fr}&velocity=${$("vel").value}`);
+});
 $("b-down").onclick = () => last && act("point down",
   `/control/plan_joint_path?x=${last.position.x}&y=${last.position.y}&z=${last.position.z}&roll=180&pitch=0&yaw=${last.rpy_deg.yaw}`);
-$("b-open").onclick = () => act("open", `/control/gripper_open_force?width=${$("gw").value}`);
-$("b-full").onclick = () => act("open fully", "/control/gripper_open");
-$("b-grasp").onclick = () => act("grasp", `/control/gripper_grasp?width=0&eps_out=0.16&force=${$("gf").value}`);
+$("b-open").onclick = () => { const mm = parseFloat($("gw").value);
+  if (!Number.isFinite(mm)) { log("gripper: enter a width in mm"); return; }
+  act(`go to ${mm} mm`, `/control/go_to_gripper_state?width=${mm / 1000}`); };
+$("b-full").onclick = () => act("open", "/control/gripper_open");
+$("b-close").onclick = () => act("close", "/control/gripper_close");
+$("b-grasp").onclick = () => act("grasp", `/control/gripper_grasp?force=${$("gf").value}`).then((b) => {
+  const missed = b.object_held === false && b.outcome === "object_missed";
+  $("g-warn").textContent = missed ? `OBJECT MISSED: ${b.error_msg || ""}` : "";
+  missWidth = missed ? b.gripper_width_m : null; });
 $("b-goto").onclick = () => act("goto", `/control/goto_joints?joints=${$("gj").value}&unit=deg`);
 $("b-dry").onclick = async () => { const r = await act("dry run", `/control/goto_joints?joints=${$("gj").value}&unit=deg&dry_run=1`);
   if (r.duration_s) log(`  planner ${r.planner_used}, ${fmt(r.duration_s, 1)} s, travel ${JSON.stringify(r.joint_travel_deg)}`); };
 $("b-tare").onclick = () => act("tare", "/force/tare");
 $("b-untare").onclick = () => act("untare", "/force/untare");
 $("b-zero").onclick = () => act("zero sensor", "/force/zero_sensor");
+$("cam").onerror = async () => { if (!$("cam").getAttribute("src")) return; const { body } = await api("/camera/info");
+  log(`camera: could not start: ${body.last_error || "see /camera/info"}`); };
 $("b-cam").onclick = () => { $("cam").src = `/camera/stream?view=${$("camview").value}&fps=10`; };
 function pill(id, text, cls) { const e = $(id); e.textContent = text; e.className = "pill " + (cls || ""); }
 function rows(el, pairs) { el.innerHTML = pairs.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join(""); }
@@ -142,7 +205,10 @@ async function refresh() {
       last = s.body;
       const P = $("ubase").checked ? { x: s.body.ur_base.position[0], y: s.body.ur_base.position[1], z: s.body.ur_base.position[2] }
                                    : s.body.position;
-      const r = s.body.rpy_deg;
+      const r = s.body.rpy_deg, held = s.body.object_held;
+      // the fingers moved some other way (another page, the API): the warning is out of date
+      if (missWidth !== null && Math.abs((s.body.gripper_width_m ?? missWidth) - missWidth) > 0.002) clearMissed();
+      pill("p-obj", held === true ? "object held" : held === false ? "no object" : "object not confirmed", held === true ? "ok" : held === false ? "" : "warn");
       rows($("state"), [["TCP x y z (m)", `${fmt(P.x)} ${fmt(P.y)} ${fmt(P.z)} ${$("ubase").checked ? "(base)" : "(base_link)"}`],
         ["roll pitch yaw (°)", `${fmt(r.roll, 1)} ${fmt(r.pitch, 1)} ${fmt(r.yaw, 1)}`],
         ["gripper", `${s.body.gripper ? "open" : "closed"}, ${fmt(s.body.gripper_width_m * 1000, 1)} mm`]]);
@@ -156,7 +222,10 @@ async function refresh() {
       pill("p-mode", b.mock_hardware ? "MOCK hardware" : `mode ${b.robot_mode}`, b.robot_mode === "RUNNING" || b.mock_hardware ? "ok" : "warn");
       pill("p-safety", `safety ${b.safety_mode ?? "n/a"}`, !b.safety_mode || b.safety_mode === "NORMAL" ? "ok" : "bad");
       pill("p-prog", `driver ${b.driver_program_running ? "in control" : "NOT in control"}`, b.driver_program_running ? "ok" : "bad");
-      pill("p-lock", b.lock_busy ? "busy" : "idle", b.lock_busy ? "warn" : "");
+      const a = b.activity;
+      if (a) showBusy(`${a.what}${a.phase ? ": " + a.phase : ""} (${fmt(a.elapsed_s, 0)} s)`);
+      else if (localAction) showBusy(`${localAction.label} (${fmt((Date.now() - localAction.t0) / 1000, 0)} s)`);
+      else showBusy(b.lock_busy ? "busy" : null);
       $("g-title").textContent = `Gripper (${b.gripper_name}${b.gripper_backend === "sim" ? ", simulated" : b.gripper_backend === "none" ? ", no control yet" : ""})`;
     }
     if (f.status === 200) {
@@ -168,7 +237,7 @@ async function refresh() {
   } catch (e) { pill("p-mode", "API unreachable", "bad"); }
 }
 api("/").then(({ body }) => { if (body.data) $("title").textContent = body.data.split(" (")[0].replace("Hello, this is ", ""); });
-refresh(); setInterval(refresh, 700);
+refresh(); setInterval(refresh, 500);
 </script>
 </body>
 </html>

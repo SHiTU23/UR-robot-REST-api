@@ -19,6 +19,11 @@ import urllib.request
 FAILS = []
 GM = {}         # the gripper model the API runs (config/grippers/<model>.yaml), set in __main__
 TCP_Z = None    # expected flange -> TCP, from the repo's config files (not from the API)
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "state", "api_token")) as _f:
+        TOKEN = os.environ.get("UR_API_TOKEN") or _f.read().strip()
+except OSError:
+    TOKEN = os.environ.get("UR_API_TOKEN")
 
 
 def load_gripper(base):
@@ -32,9 +37,11 @@ def load_gripper(base):
     TCP_Z = cell["tool"]["changer_length_m"] + GM["mount_offset_m"] + GM["table"][-1][2]
 
 
-def call(base, method, path, body=None, raw=None, ctype=None, timeout=120):
+def call(base, method, path, body=None, raw=None, ctype=None, timeout=120, auth=True):
     data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
     req = urllib.request.Request(base + path, data=data, method=method)
+    if TOKEN and auth:
+        req.add_header("Authorization", "Bearer " + TOKEN)
     if body is not None:
         req.add_header("Content-Type", "application/json")
     if ctype:
@@ -203,7 +210,7 @@ def scene(B):
     check("scene/objects sync", s == 200 and r["added"] == ["det_1"], f"{s} {r}")
     s, r = call(B, "GET", "/scene/objects?geometry=1")
     ids = [o["id"] for o in r.get("objects", [])]
-    check("scene/objects v2 listing", s == 200 and "box_1" in ids and "pipefit.test1.bin" in ids and "table" in ids,
+    check("scene/objects v2 listing", s == 200 and "box_1" in ids and "pipefit.test1.bin" in ids and "floor" in ids,
           f"{ids}")
     mesh_body = {"namespace": "pipefit.test2", "objects": [
         {"id": "pipefit.test2.part", "pose": {"position": [0.3, 0.8, 0.1], "orientation": [0, 0, 0, 1]},
@@ -233,8 +240,8 @@ def scene(B):
         call(B, "DELETE", f"/scene/objects/{n}")
     s, r = call(B, "DELETE", "/scene/models/testbox")
     check("delete model", s == 200, f"{s} {r}")
-    s, r = call(B, "DELETE", "/scene/objects/table")
-    check("built-in table protected", s == 409 and r["error"] == "builtin", f"{s} {r.get('error')}")
+    s, r = call(B, "DELETE", "/scene/objects/floor")
+    check("built-in floor protected", s == 409 and r["error"] == "builtin", f"{s} {r.get('error')}")
 
 
 def plan(B):
@@ -339,7 +346,142 @@ def safety(B, ursim_ip):
     check("resume runs the last requested motion", s == 200 and abs(q) < 0.2, f"{s} {r.get('outcome')} j1 {q:.2f} (want 0)")
 
 
-GROUPS = {"motion": motion, "gripper": gripper, "scene": scene, "plan": plan, "misc": misc}
+def quat_angle_deg(a, b):
+    return math.degrees(2 * math.acos(min(1.0, abs(sum(x * y for x, y in zip(a, b))))))
+
+
+def rotate(B):
+    q = ",".join(str(v) for v in WORK_DEG)
+    call(B, "GET", f"/control/goto_joints?joints={q}&unit=deg&velocity=0.5&max_joint_travel_deg=0")
+
+    def tcp():
+        s = call(B, "GET", "/state")[1]
+        return [s["position"][k] for k in "xyz"], [s["orientation"][k] for k in "xyzw"]
+    p0, q0 = tcp()
+    j0 = call(B, "GET", "/joints")[1]["positions"]
+    moved = lambda: max(abs(a - b) for a, b in zip(call(B, "GET", "/joints")[1]["positions"], j0))  # noqa: E731
+    xyz = f"x={p0[0]}&y={p0[1]}&z={p0[2] + 0.02}"
+    s, r = call(B, "GET", f"/control/plan_cartesian_path?{xyz}&dry_run=1")
+    time.sleep(0.5)
+    check("plan_cartesian_path dry_run does not move", s == 200 and r["outcome"] == "planned" and moved() < 1e-3, f"{s} {moved():.5f} rad")
+    call(B, "GET", "/control/gripper_open")
+    for path in (f"/control/plan_cartesian_path?{xyz}&dry_run=1&require_object=1", "/control/rotate_tcp?axis=z&deg=5&dry_run=1&require_object=1"):
+        s, r = call(B, "GET", path)
+        check(f"dry run allowed, nothing moves: {path[:30]}", s == 200 and moved() < 1e-3, str(s))
+    for path in (f"/control/plan_joint_path?{xyz}&dry_run=1&require_object=1", f"/control/home?dry_run=1&require_object=1", "/control/nudge_joint?joint=1&deg=1&dry_run=1&require_object=1"):
+        s, r = call(B, "GET", path)
+        check(f"dry_run is no way past the checks: {path[:30]}", s == 409 and r.get("error") == "object_not_held" and moved() < 1e-3, f"{s} {r.get('error')}")
+    for frame in ("base_link", "tool", "base"):
+        for ax in "xyz":
+            p1, q1 = tcp()
+            s, r = call(B, "GET", f"/control/rotate_tcp?axis={ax}&deg=10&frame={frame}&dry_run=1&velocity=0.3")
+            ok = s == 200 and r["outcome"] == "planned" and r["tcp_drift_from_start_mm"] < 1.0
+            check(f"plan rotate {ax} 10 deg ({frame})", ok, f"{s} {r.get('outcome')} drift {r.get('tcp_drift_from_start_mm')} mm, {r.get('waypoints')} points")
+            s, r = call(B, "GET", f"/control/rotate_tcp?axis={ax}&deg=10&frame={frame}&velocity=0.3")
+            time.sleep(0.2)
+            p2, q2 = tcp()
+            d = math.dist(p1, p2) * 1000
+            a = quat_angle_deg(q1, q2)
+            check(f"rotate {ax} 10 deg ({frame})", s == 200 and r["outcome"] == "success" and d < 1.0 and abs(a - 10) < 0.2, f"{s} {r.get('outcome')} moved {d:.3f} mm, turned {a:.2f} deg")
+            call(B, "GET", f"/control/rotate_tcp?axis={ax}&deg=-10&frame={frame}&velocity=0.3")
+    pz, qz = tcp()
+    call(B, "GET", "/control/rotate_tcp?axis=z&deg=20&frame=base_link&velocity=0.3")
+    pa, qa = tcp()
+    R = lambda v: (math.cos(math.radians(v) / 2), math.sin(math.radians(v) / 2))  # noqa: E731
+    c, sn = R(20)
+    x, y, z, w = qz
+    exp = [c * x - sn * y, c * y + sn * x, c * z + sn * w, c * w - sn * z]     # (rotation about base z) * q
+    check("base z turns about the base axis, not the tool's", quat_angle_deg(exp, qa) < 0.2, f"{quat_angle_deg(exp, qa):.3f} deg off")
+    call(B, "GET", "/control/rotate_tcp?axis=z&deg=-20&frame=base_link&velocity=0.3")
+    for path in ("axis=w&deg=5", "axis=z&deg=0", "axis=z&deg=90", "axis=z&deg=nan", "axis=z", "axis=z&deg=5&frame=moon"):
+        s, _ = call(B, "GET", f"/control/rotate_tcp?{path}")
+        check(f"rotate_tcp {path} -> 400", s == 400, str(s))
+
+
+def gripper_buttons(B):
+    s, r = call(B, "GET", "/control/gripper_close")
+    check("close button", s == 200 and r["result"], f"{s} {r.get('width_m')}")
+    check("  /state says closed", call(B, "GET", "/state")[1]["gripper"] == 0)
+    s, r = call(B, "GET", "/control/go_to_gripper_state?width=0.05")
+    check("go to 50 mm", s == 200 and abs(r["width_m"] - 0.05) < 1e-3, f"{s} {r.get('width_m')}")
+    s, r = call(B, "GET", "/control/go_to_gripper_state?width=0.02")
+    check("go to a smaller width", s == 200 and abs(r["width_m"] - 0.02) < 1e-3, f"{s} {r.get('width_m')}")
+    s, r = call(B, "GET", "/control/gripper_open")
+    check("open button", s == 200 and r["width_m"] == GM["max_width_m"], f"{s} {r.get('width_m')}")
+    s, _ = call(B, "GET", "/control/go_to_gripper_state?width=abc")
+    check("width not a number -> 400", s == 400, str(s))
+
+
+def busy_display(B):
+    box = {}
+    t = threading.Thread(target=lambda: box.update(r=call(B, "GET", "/control/gripper_close")))
+    t.start()
+    time.sleep(0.05)
+    h = call(B, "GET", "/health")[1]
+    s, r = call(B, "GET", "/control/gripper_open")
+    t.join()
+    check("/health says what is running", h["lock_busy"] and h["activity"]["what"] == "Closing gripper", str(h.get("activity")))
+    check("second press -> 409 naming it", s == 409 and r.get("activity", {}).get("what") == "Closing gripper", f"{s} {r.get('activity')}")
+    check("idle again afterwards", call(B, "GET", "/health")[1]["activity"] is None)
+    call(B, "GET", "/control/gripper_open")
+
+
+def access(B):
+    for path in ("/state", "/control/home", "/control/goto_joints?joints=0,0,0,0,0,0", "/files", "/help"):
+        s, _ = call(B, "GET", path, auth=False)
+        check(f"no token: {path} -> 401", s == 401, str(s))
+    s, _ = call(B, "POST", "/robot/home", auth=False)
+    check("no token: POST /robot/home -> 401", s == 401, str(s))
+    s, _ = call(B, "GET", "/control/stop", auth=False)
+    check("no token: stop still works", s == 200, str(s))
+    s, _ = call(B, "POST", "/login", {"token": "wrong-token-wrong-token"}, auth=False)
+    check("login with a wrong token -> 401", s == 401, str(s))
+
+
+def bad_requests(B):
+    q = {"position": [0.5, 0.2, 0.3], "orientation": [1, 0, 0, 0]}
+    for name, body in (("empty body", {}), ("pose misnamed at top level", q), ("no orientation", {"pose": {"position": [0.5, 0.2, 0.3]}}),
+                       ("no position", {"pose": {"orientation": [1, 0, 0, 0]}}), ("pose not an object", {"pose": 3}),
+                       ("n_solutions not a number", {"pose": q, "n_solutions": "many"})):
+        s, r = call(B, "POST", "/plan/ik", body)
+        check(f"/plan/ik {name} -> 400", s == 400, f"{s} {r.get('msg') if isinstance(r, dict) else r}")
+    s, r = call(B, "POST", "/plan/ik", {"pose": q})
+    check("/plan/ik good pose -> 200", s == 200 and r["analytic_solutions"] > 0, str(s))
+    for path in ("/control/gripper_open_force?width=nan", "/control/gripper_grasp?force=inf",
+                 "/control/go_to_gripper_state?width=nan", "/control/gripper_grasp?max_retries=-1"):
+        s, _ = call(B, "GET", path)
+        check(f"{path} -> 400", s == 400, str(s))
+
+
+def home(B):
+    s, r0 = call(B, "GET", "/robot/home")
+    check("GET /robot/home", s == 200 and len(r0["home_rad"]) == 6, f"{s} {r0.get('source')}")
+    was_saved = r0["source"] == "saved"
+    s, r = call(B, "POST", "/robot/home")
+    q = call(B, "GET", "/joints")[1]["positions"]
+    check("save current pose as home", s == 200 and r["source"] == "saved" and
+          max(abs(a - b) for a, b in zip(r["home_rad"], q)) < 1e-3, f"{s} {r.get('msg')}")
+    check("/control/home target follows", call(B, "GET", "/robot/home")[1]["home_rad"] == r["home_rad"])
+    if not was_saved:
+        s, r = call(B, "DELETE", "/robot/home")
+        check("reset to the config home", s == 200 and r["source"] == "config" and r["home_rad"] == r0["config_home_rad"], str(s))
+
+
+def grasp_check(B):
+    """Needs nothing from the arm: with no width feedback, the object must not count as confirmed."""
+    call(B, "GET", "/control/gripper_open")
+    q = ",".join(str(v) for v in call(B, "GET", "/joints")[1]["positions"])
+    s, r = call(B, "GET", f"/control/goto_joints?joints={q}&require_object=1")
+    check("opened: require_object refuses", s == 409 and r["error"] == "object_not_held", f"{s} {r.get('error')}")
+    s, r = call(B, "GET", f"/control/goto_joints?joints={q}&require_object=1&dry_run=1")
+    check("require_object lets a dry run through", s == 200, str(s))
+    s, r = call(B, "GET", "/state")
+    check("/state reports object_held", s == 200 and "object_held" in r, str(r.get("object_held")))
+    call(B, "GET", "/control/gripper_open")
+
+
+GROUPS = {"access": access, "bad_requests": bad_requests, "home": home, "grasp_check": grasp_check, "gripper_buttons": gripper_buttons, "busy_display": busy_display, "rotate": rotate, "motion": motion,
+          "gripper": gripper, "scene": scene, "plan": plan, "misc": misc}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

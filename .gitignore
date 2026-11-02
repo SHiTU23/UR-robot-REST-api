@@ -3,3 +3,4 @@ __pycache__/
 state/
 data/
 *.log
+Log/

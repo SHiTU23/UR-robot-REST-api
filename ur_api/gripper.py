@@ -5,7 +5,7 @@
   2. stop whatever runs on the controller -- with the ROS driver that is its External Control script --
      and wait until the dashboard really reports nothing running (a play while the old script is still
      winding down is refused, and a "running" poll would then mistake the dying script for the program);
-  3. load + play gripper_open.urp / gripper_close.urp (pendant programs that read those registers in a
+  3. load + play gripper.open_program / close_program (pendant programs, possibly the same one, that read those registers in a
      Script node); play is retried while PolyScope is still loading the program;
   4. wait for the program to start and finish;
   5. ALWAYS give control back to the driver (io_and_status_controller/resend_robot_program) -- without
@@ -16,18 +16,38 @@ The gripper's real width is known only if the programs write it into an output r
 width_measured=false. SimGripper is the same interface without hardware (mock hardware / tests); NoGripper
 answers 501 for a gripper model with no control yet (Robotiq 2F-85 on the real arm).
 """
+import os
 import threading
 import time
 
 from dashboard import DashboardError
 from rtde_regs import RTDEError
 
-OUTCOME_STATUS = {"success": 200, "action_timeout": 504, "server_unreachable": 503, "action_failed": 500,
+OUTCOME_STATUS = {"success": 200, "object_missed": 409, "action_timeout": 504, "server_unreachable": 503, "action_failed": 500,
                   "recovery_failed": 500, "stopped": 200, "not_supported": 501}
 
 
 class GripperResult(dict):
     pass
+
+
+def grasp_verdict(width, target, eps_in, eps_out, min_object_width, width_given):
+    """Judge a finished close from the MEASURED width (m): (object_held, outcome, error).
+    With an expected object width, the fingers must stop within [target - eps_in, target + eps_out]. Without one
+    (close until contact), they must stop on something: nearly fully closed means they met nothing."""
+    if width_given:
+        lo, hi = target - eps_in, target + eps_out
+        if lo <= width <= hi:
+            return True, "success", None
+        if width < lo:
+            return False, "object_missed", (f"fingers closed to {width * 1000:.1f} mm, below the expected "
+                                            f"{lo * 1000:.1f} mm: object missed or dropped")
+        return False, "action_failed", (f"fingers stopped at {width * 1000:.1f} mm, above the expected "
+                                        f"{hi * 1000:.1f} mm: wrong object or something in the way")
+    if width <= min_object_width:
+        return False, "object_missed", (f"fingers closed to {width * 1000:.1f} mm (at most "
+                                        f"{min_object_width * 1000:.1f} mm counts as empty): object missed")
+    return True, "success", None
 
 
 class _Base:
@@ -42,6 +62,8 @@ class _Base:
         self.width_measured = False
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
+        self.holding = None            # True: grasp confirmed. False: missed or opened. None: not known
+        self.phase = None              # the step of a running action, for the panel
 
     def clamp(self, width, force):
         notes = []
@@ -61,26 +83,35 @@ class _Base:
 
     def state(self):
         return {"width_m": self.width, "width_measured": self.width_measured, "type": self.cell.gripper["type"],
-                "model": self.cell.gripper_model, "backend": self.backend}
+                "model": self.cell.gripper_model, "backend": self.backend, "object_held": self.holding}
 
     def stop(self):
         self.stop_event.set()
 
 
 class SimGripper(_Base):
-    """No hardware: the fingers 'arrive' at once. A grasp closes to the requested width (the object)."""
+    """No hardware: the fingers 'arrive' at once. A grasp closes to the requested width (the object).
+    With env UR_SIM_OBJECT_WIDTH_M the width counts as measured and the fingers stop on an object that wide
+    (0 = no object in the fingers, so the grasp-check logic can be tried without a robot)."""
     backend = "sim"
 
     def __init__(self, cell, ros):
         super().__init__(cell, ros)
-        self._set_width(self.max_width, False)
+        raw = os.environ.get("UR_SIM_OBJECT_WIDTH_M", "")
+        self.sim_object = float(raw) if raw else None
+        self._set_width(self.max_width, self.sim_object is not None)
 
     def move(self, width, force=None, closing=False, timeout_s=10.0):
         w, f, notes = self.clamp(width, force)
         self.stop_event.clear()
         time.sleep(0.2)
-        self._set_width(w, False)
-        return GripperResult(outcome="success", width_m=w, force_n=f, notes=notes, program=None, elapsed_s=0.2)
+        measured = self.sim_object is not None
+        if measured and closing:
+            w = max(w, self.sim_object)
+        self._set_width(w, measured)
+        self.holding = None if closing else False
+        return GripperResult(outcome="success", width_m=w, width_measured=measured, force_n=f, notes=notes,
+                             program=None, elapsed_s=0.2)
 
     def available(self):
         return True
@@ -185,11 +216,15 @@ class RG6Gripper(_Base):
         out = GripperResult(width_m=None, force_n=f, notes=notes, program=program)
         failed, outcome = None, "success"
         try:
+            self.phase = "sending width and force"
             self._write_registers(w, f)
+            self.phase = "taking over from the driver"
             if not self.dash.wait_stopped(5.0):
                 raise RuntimeError(f"the controller is still busy before {program} (could not stop it)")
+            self.phase = "starting the gripper program"
             self.dash.load(program)
             self._play_when_loaded(program)
+            self.phase = "fingers moving"
             started, deadline = False, time.time() + timeout_s
             while True:
                 if self.stop_event.is_set():
@@ -211,6 +246,7 @@ class RG6Gripper(_Base):
             failed, outcome = e, ("server_unreachable" if isinstance(e, (DashboardError, RTDEError, OSError))
                                   else "action_failed")
         # always: nothing may run when the driver's script is re-sent (resending while a .urp plays blocks)
+        self.phase = "giving control back to the driver"
         stopped = self.dash.wait_stopped(5.0) if self.available() else False
         ok, msg = (self._hand_back() if stopped else
                    (False, f"{program} is still running on the controller; press Stop on the pendant"))
@@ -219,7 +255,10 @@ class RG6Gripper(_Base):
             out["control_restore_msg"] = msg
             if failed is None:
                 failed, outcome = RuntimeError(f"could not give control back to the driver: {msg}"), "action_failed"
+        self.phase = "reading the width"
         measured = self._read_feedback()
+        self.phase = None
+        self.holding = False if outcome == "success" and not closing else None
         if outcome == "success":
             self._set_width(measured if measured is not None else w, measured is not None)
         out.update(outcome=outcome, width_m=self.width, width_measured=self.width_measured,

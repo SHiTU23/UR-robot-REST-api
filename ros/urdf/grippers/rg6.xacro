@@ -45,13 +45,13 @@
   </xacro:macro>
 
   <!-- the RG6 base (mounting face) at z along `parent`'s z, turned by yaw -->
-  <xacro:macro name="gripper_rg6" params="tf_prefix parent z yaw">
+  <xacro:macro name="gripper_rg6" params="tf_prefix parent x y z yaw">
     <xacro:property name="p" value="${tf_prefix}"/>
     <xacro:rg6_link name="${p}rg6_base_link" mesh="base_link" rgba="0.8 0.8 0.8 1"/>
     <joint name="${p}${parent}-rg6_base_link" type="fixed">
       <parent link="${p}${parent}"/>
       <child link="${p}rg6_base_link"/>
-      <origin xyz="0 0 ${z}" rpy="0 0 ${yaw}"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 ${yaw}"/>
     </joint>
     <xacro:rg6_finger p="${p}" side="left" reflect="1.0"/>
     <xacro:rg6_finger p="${p}" side="right" reflect="-1.0"/>

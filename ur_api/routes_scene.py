@@ -219,7 +219,7 @@ def scene_info():
     info.update({
         "motion_enabled": True, "mock_hardware": C.mock, "builtin": C.core.builtin,
         "builtin_attached": [b["id"] for b in C.core.builtin], "builtin_world": list(C.cell.builtin_world),
-        "flange_to_tcp_m": C.cell.tcp_z, "acm_client_entries": len(C.core.acm_entries), "padding": C.core.padding,
+        "flange_to_tcp_m": C.cell.tcp_z, "tcp_xy_m": C.cell.tcp_xy, "acm_client_entries": len(C.core.acm_entries), "padding": C.core.padding,
         "limits": dict(C.core.limits), "shape_types": list(SHAPE_TYPES), "mesh_formats": MESH_FORMATS,
         "frames_accepted": [C.cell.base_frame, C.cell.planning_frame],
         "hash_spec": "scene_hash = sha256 of {objects: [per-object dicts], acm: [[a,b,allowed]...] sorted (client "

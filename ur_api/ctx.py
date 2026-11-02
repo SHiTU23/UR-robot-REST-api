@@ -17,8 +17,10 @@ class Ctx:
     legacy = None        # legacy_scene.LegacyScene
     scene_io = None      # scene_io.MoveItSceneIO
     mock = False
+    home_path = None     # where a home pose saved with POST /robot/home lives
     lock = threading.Lock()     # THE motion lock: motion + gripper endpoints, scene commits; non-blocking -> 409
     last_motion = None          # for /control/resume
+    activity = None             # what holds the lock: {"what", "since"}, shown by /health and the panel
 
 
 C = Ctx

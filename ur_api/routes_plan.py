@@ -64,6 +64,14 @@ def _width(d, key="gripper_width_m"):
 
 
 def _frame_pose(pd, path):
+    """A target pose from a request: position and orientation are required, so a missing or misnamed pose is a 400
+    instead of being read as the identity pose (which looked like an unreachable target)."""
+    if not isinstance(pd, dict):
+        raise err(400, "bad_pose", "pose must be an object {frame_id, position, orientation}", path)
+    missing = [k for k in ("position", "orientation") if k not in pd]
+    if missing:
+        raise err(400, "bad_pose", f"pose needs position [x, y, z] and orientation [qx, qy, qz, qw]; missing "
+                  f"{', '.join(missing)}", path)
     frame = pd.get("frame_id") or C.cell.base_frame
     pose = canon_pose({k: v for k, v in pd.items() if k != "frame_id"}, path)
     if frame == "base":
@@ -169,7 +177,7 @@ def plan_one(d, start_state, start_q, t0):
     if ttype == "joints":
         goal_q = _joints(target.get("joints"), "target.joints")
     elif ttype == "pose":
-        pose = _frame_pose(target.get("pose") or {}, "target.pose")
+        pose = _frame_pose(target.get("pose", {}), "target.pose")
         if planner != "LIN":
             if link != C.cell.tcp_link:
                 raise err(400, "bad_request", f"pose targets for RRTConnect/PTP must use link {C.cell.tcp_link}")
@@ -206,6 +214,7 @@ def plan_one(d, start_state, start_q, t0):
     if not ok:
         resp["elapsed_ms"] = int((time.time() - t0) * 1000)
         return resp
+    C.motion.display(traj, start_state)       # show the plan in RViz; nothing moves
     pts = traj_points(traj, C.cell.arm_joints)
     path = [q for _, q in pts]
     resp["trajectory"] = {"joint_names": C.cell.arm_joints, "points": [{"t": t, "q": q} for t, q in pts]}
@@ -275,9 +284,9 @@ def plan_ik():
     _check_version(d)
     if d.get("link", C.cell.tcp_link) != C.cell.tcp_link:
         raise err(400, "bad_request", f"only link {C.cell.tcp_link} is supported", "link")
-    pose = _frame_pose(d.get("pose") or {}, "pose")
-    n = int(d.get("n_solutions", 4))
-    if not 1 <= n <= 32:
+    pose = _frame_pose(d.get("pose", {}), "pose")
+    n = d.get("n_solutions", 4)
+    if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 32:
         raise err(400, "bad_request", "n_solutions must be 1..32", "n_solutions")
     base, q0 = _state(None, _width(d))
     seeds = [_joints(s, f"seeds[{i}]") for i, s in enumerate(d.get("seeds") or [q0])]

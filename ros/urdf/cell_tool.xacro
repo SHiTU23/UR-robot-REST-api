@@ -28,6 +28,8 @@
     <xacro:property name="L" value="${t['changer_length_m']}"/>
     <!-- table rows run open -> closed: the last row is the closed gripper -->
     <xacro:property name="tcp" value="${L + gm['mount_offset_m'] + gm['table'][-1][2]}"/>
+    <!-- off-axis TCP from a calibration of this gripper on this arm; other gripper models have none -->
+    <xacro:property name="txy" value="${gm.get('tcp_xy_m', [0.0, 0.0])}"/>
     <xacro:property name="yaw" value="${0.0 if gm['closing_axis_in_mount'] == t['finger_axis'] else pi / 2}"/>
 
     <!-- flange plate + tool changer -->
@@ -50,7 +52,7 @@
     <!-- the gripper on the changer -->
     <xacro:if value="${model == 'rg6'}">
       <xacro:include filename="grippers/rg6.xacro"/>
-      <xacro:gripper_rg6 tf_prefix="${tf_prefix}" parent="tool0" z="${L + gm['mount_offset_m']}" yaw="${yaw}"/>
+      <xacro:gripper_rg6 tf_prefix="${tf_prefix}" parent="tool0" x="${txy[0]}" y="${txy[1]}" z="${L + gm['mount_offset_m']}" yaw="${yaw}"/>
     </xacro:if>
     <xacro:if value="${model == 'robotiq_2f85'}">
       <xacro:include filename="grippers/robotiq_2f85.xacro"/>
@@ -62,7 +64,7 @@
     <joint name="${tf_prefix}tool0-tcp" type="fixed">
       <parent link="${tf_prefix}tool0"/>
       <child link="${tf_prefix}tcp"/>
-      <origin xyz="0 0 ${tcp}" rpy="0 0 0"/>
+      <origin xyz="${txy[0]} ${txy[1]} ${tcp}" rpy="0 0 0"/>
     </joint>
 
     <!-- wrist camera at its hand-eye pose (camera optical frame: x right, y down, z forward) -->

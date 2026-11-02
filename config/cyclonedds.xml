@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Keep ROS 2 traffic on this PC. The containers use the host network, so with default settings every ROS node
+     would also talk on the Wi-Fi, and anyone there with ROS_DOMAIN_ID=42 could command the trajectory controller
+     directly, past the API. The driver's connection to the robot is plain TCP and does not use DDS. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces><NetworkInterface name="lo" multicast="false"/></Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+      <Peers><Peer address="localhost"/></Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
