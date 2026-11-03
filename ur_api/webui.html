@@ -173,8 +173,12 @@ $("b-sethome").onclick = () => {
 $("b-resethome").onclick = () => confirm("Go back to the home pose from cell.yaml?") && act("reset home", "/robot/home", { method: "DELETE" });
 let poses = [];
 function selectedPose() { return poses.find((p) => p.name === $("posesel").value); }
+// Say why a press did nothing, next to the buttons
+function poseMsg(text) { const e = $("poseinfo"); e.textContent = text; e.style.color = "var(--bad)"; e.style.fontWeight = "600"; log(`saved poses: ${text}`); }
+function needPose() { const p = selectedPose(); if (!p) poseMsg("No pose to use yet. Type a name above and press Save current pose first."); return p; }
 function showPoseInfo() {
   const p = selectedPose();
+  $("poseinfo").style.color = ""; $("poseinfo").style.fontWeight = "";
   $("poseinfo").textContent = p ? `${p.joints_deg.join(", ")} deg` : "No saved poses yet: move the arm, type a name, press Save.";
 }
 async function loadPoses(pick) {
@@ -190,20 +194,21 @@ async function loadPoses(pick) {
 $("posesel").onchange = showPoseInfo;
 $("b-savepose").onclick = async () => {
   const name = $("pname").value.trim();
-  if (!name) { log("saved poses: type a name first"); return; }
+  if (!name) { poseMsg("Type a name for this pose first."); $("pname").focus(); return; }
   const exists = poses.some((p) => p.name === name);
   if (exists && !confirm(`Replace the saved pose "${name}" with the current pose?`)) return;
   const r = await act(`save pose "${name}"`, "/robot/poses", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, overwrite: exists }) });
   if (r.status === "saved") { $("pname").value = ""; await loadPoses(name); }
+  else poseMsg(`Not saved: ${r.msg || r.error || "see the log"}`);
 };
 const poseUrl = (p, extra = "") => `/control/goto_pose?name=${encodeURIComponent(p.name)}&velocity=${$("vel").value}${extra}`;
-$("b-gotopose").onclick = () => { const p = selectedPose();
+$("b-gotopose").onclick = () => { const p = needPose();
   if (p && confirm(`Move the arm to "${p.name}"?\n${p.joints_deg.join(", ")} deg\nSpeed ${$("vel").value}`)) act(`go to "${p.name}"`, poseUrl(p)); };
-$("b-drypose").onclick = async () => { const p = selectedPose(); if (!p) return;
+$("b-drypose").onclick = async () => { const p = needPose(); if (!p) return;
   const r = await act(`preview "${p.name}"`, poseUrl(p, "&dry_run=1"));
   if (r.duration_s) log(`  planner ${r.planner_used}, ${fmt(r.duration_s, 1)} s, travel ${JSON.stringify(r.joint_travel_deg)}; shown in RViz`); };
-$("b-delpose").onclick = async () => { const p = selectedPose();
+$("b-delpose").onclick = async () => { const p = needPose();
   if (p && confirm(`Delete the saved pose "${p.name}"?`)) { await act(`delete pose "${p.name}"`, `/robot/poses/${encodeURIComponent(p.name)}`, { method: "DELETE" }); await loadPoses(); } };
 loadPoses();
 let last = null;
