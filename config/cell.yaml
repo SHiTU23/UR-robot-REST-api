@@ -58,6 +58,6 @@ world_boxes:
 
 camera:
   backend: orbbec                  # orbbec | realsense | none (env UR_CAMERA wins)
-  width: 1280
-  height: 720
-  fps: 30                          # colour 1280x720 + Y16 depth at 30 fps: verified on this Gemini 2 (sota UI, 2026-09-14)
+  width: 1920
+  height: 1080
+  fps: 30                          # colour 1920x1080 + Y16 depth at 30 fps: checked on this Gemini 2, 2026-11-03

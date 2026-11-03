@@ -30,6 +30,7 @@ app = Flask(__name__)
 
 
 app.before_request(auth.gate)
+app.after_request(auth.allow_any_site)
 app.add_url_rule("/login", "login", auth.login, methods=["POST"])
 app.add_url_rule("/logout", "logout", auth.logout, methods=["POST"])
 
@@ -124,7 +125,8 @@ def api_help():
             "tcp": f"{C.cell.tcp_link}: fingertip centre with the gripper closed, {C.cell.tcp_z:.3f} m along tool0 z, "
                    f"x {C.cell.tcp_xy[0]:+.5f} y {C.cell.tcp_xy[1]:+.5f} m off the flange axis",
             "joints": C.cell.arm_joints,
-            "access": "every endpoint except /, /ui, /login and /control/stop needs 'Authorization: Bearer <token>'",
+            "access": ("every endpoint except /, /ui, /login and /control/stop needs 'Authorization: Bearer <token>'"
+                       if auth.enabled() else "open: no token (UR_API_AUTH=off); anyone who can reach this port can move the arm"),
             "grasp_check": "gripper_grasp returns object_held (true, false, or null without width feedback) and "
                            "outcome object_missed; add require_object=1 to a motion so it refuses unless object_held "
                            "is true (dry runs are not refused)",

@@ -20,9 +20,17 @@ COOKIE = "ur_api_session"
 _token = None
 
 
+def enabled():
+    """Env UR_API_AUTH=off turns the token check off: anyone who can reach the port can then move the arm."""
+    return os.environ.get("UR_API_AUTH", "on").lower() not in ("off", "0", "false", "no")
+
+
 def load_token(state_dir):
     """The API token: env UR_API_TOKEN, else the token file (created owner-only when missing)."""
     global _token
+    if not enabled():
+        log.warning("UR_API_AUTH=off: NO TOKEN. Anyone who can reach this port can move the arm")
+        return
     t = os.environ.get("UR_API_TOKEN", "").strip()
     if not t:
         path = os.path.join(state_dir, "api_token")
@@ -56,14 +64,25 @@ def _authorized():
 
 def gate():
     """before_request hook: None lets the request through."""
-    if request.path in OPEN or _authorized():
+    if not enabled() or request.path in OPEN or _authorized():
         return None
     return jsonify({"error": "unauthorized", "msg": "send 'Authorization: Bearer <token>' (./run.sh token prints "
                     "it), or log in at /ui"}), 401
 
 
+def allow_any_site(response):
+    """after_request hook: with the token off, a website on another PC may call the API from its browser code too."""
+    if not enabled():
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+
+
 def login():
     """Browser panel login: POST {"token": "..."} sets the session cookie."""
+    if not enabled():
+        return jsonify({"status": "ok", "msg": "no login needed: UR_API_AUTH=off"})
     d = request.get_json(silent=True)
     t = d.get("token") if isinstance(d, dict) else None
     if not isinstance(t, str) or not hmac.compare_digest(t.strip().encode(), _token.encode()):

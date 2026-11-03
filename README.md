@@ -11,7 +11,7 @@ the URL. Its joint vectors have 6 values instead of 7, and its frames and grippe
 [Differences](#differences-from-the-franka-api)).
 
 ```
-alias api='curl -H "Authorization: Bearer $(./run.sh token)"'   # see Access
+alias api=curl
 api http://localhost:5000/help                                   # every endpoint, generated from the code
 api http://localhost:5000/state                                  # TCP pose, gripper, joints
 api "http://localhost:5000/control/goto_joints?joints=0,-100,100,-90,-90,0&unit=deg&dry_run=1"
@@ -121,7 +121,12 @@ Before the first run on the **real arm**:
 
 ## Access
 
-Layers, from the outside in:
+**The API is currently OPEN: no token, and it listens on every network.** Anyone who can reach `http://<pc>:5000` can
+move the arm, including from a browser on the same Wi-Fi. Set up that way on purpose for now (`docker-compose.yml`);
+`/` and `/help` say so too. To connect, use `http://<pc>:5000`. The firewall script below would block this.
+
+To lock it again, set `UR_API_HOST=127.0.0.1` and `UR_API_AUTH=on` in `docker-compose.yml` and restart. The layers are
+then, from the outside in:
 
 1. **Firewall:** `sudo tools/lockdown_firewall.sh` lets only SSH in over Wi-Fi and stops routing from Wi-Fi to the
    robot network. Needed because ROS 2's UDP ports listen on all interfaces. `sudo ufw disable` undoes it.
@@ -211,7 +216,7 @@ kept in `state/home.json` and refused if the arm is moving, near a joint limit o
 
 ## Safety
 
-- **Access:** see [Access](#access). A token is required, and the API listens on this PC only by default.
+- **Access:** currently open, with no token; see [Access](#access).
 - **Collision model:** the fixed scene is one floor box (`world_boxes` in `config/cell.yaml`); add walls and a
   ceiling there for this cell. Tool sizes marked `MEASURE` are estimates. The gripper's own links are excluded
   from checks against each other and against the changer, camera and wrist.

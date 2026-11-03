@@ -44,8 +44,11 @@ services:
       UR_MOCK_HARDWARE: ${UR_MOCK_HARDWARE:-0}
       UR_CAMERA: ${UR_CAMERA:-}
       UR_API_PORT: ${UR_API_PORT:-5000}
-      UR_API_HOST: ${UR_API_HOST:-127.0.0.1}   # this PC only; see README, Access
-      UR_API_TOKEN: ${UR_API_TOKEN:-}          # empty = state/api_token
+      # OPEN for now: any device on the network can reach the API and move the arm, with no token.
+      # To lock it again: UR_API_HOST=127.0.0.1 and UR_API_AUTH=on (see README, Access).
+      UR_API_HOST: ${UR_API_HOST:-0.0.0.0}
+      UR_API_AUTH: ${UR_API_AUTH:-off}
+      UR_API_TOKEN: ${UR_API_TOKEN:-}          # used with UR_API_AUTH=on; empty = state/api_token
       UR_SIM_OBJECT_WIDTH_M: ${UR_SIM_OBJECT_WIDTH_M:-}
       CYCLONEDDS_URI: file:///app/config/cyclonedds.xml
     command: python3 /app/ur_api/server.py

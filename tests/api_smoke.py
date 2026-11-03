@@ -427,6 +427,11 @@ def busy_display(B):
 
 
 def access(B):
+    if call(B, "GET", "/state", auth=False)[0] == 200:
+        check("UR_API_AUTH=off: /help says the API is open", "open" in call(B, "GET", "/help", auth=False)[1]["conventions"]["access"])
+        s, r = call(B, "GET", "/robot/home", auth=False)
+        check("UR_API_AUTH=off: no token needed", s == 200, str(s))
+        return
     for path in ("/state", "/control/home", "/control/goto_joints?joints=0,0,0,0,0,0", "/files", "/help"):
         s, _ = call(B, "GET", path, auth=False)
         check(f"no token: {path} -> 401", s == 401, str(s))
