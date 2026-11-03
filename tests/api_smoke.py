@@ -426,6 +426,49 @@ def busy_display(B):
     call(B, "GET", "/control/gripper_open")
 
 
+def named_poses(B):
+    from urllib.parse import quote
+    n1, n2 = "smoke pose 1", "smoke_pose.2"
+    for n in (n1, n2):
+        call(B, "DELETE", "/robot/poses/" + quote(n))
+    a = [0, -100, 100, -90, -90, 0]
+    b = [10, -95, 95, -90, -90, 10]
+    goto = lambda v: call(B, "GET", "/control/goto_joints?unit=deg&velocity=0.5&max_joint_travel_deg=0&joints=" + ",".join(map(str, v)))  # noqa: E731
+    now = lambda: [math.degrees(v) for v in call(B, "GET", "/joints")[1]["positions"]]  # noqa: E731
+    off = lambda t: max(abs(x - y) for x, y in zip(now(), t))  # noqa: E731
+    goto(a)
+    s, r = call(B, "POST", "/robot/poses", {"name": n1})
+    check("save a named pose", s == 200 and r["status"] == "saved" and max(abs(x - y) for x, y in zip(r["joints_deg"], a)) < 0.05, f"{s} {r.get('msg', '')}")
+    s, r = call(B, "POST", "/robot/poses", {"name": n1})
+    check("same name again -> 409", s == 409 and r["error"] == "pose_exists", str(s))
+    goto(b)
+    s, r = call(B, "POST", "/robot/poses", {"name": n2})
+    check("save a second pose", s == 200, str(s))
+    names = [p["name"] for p in call(B, "GET", "/robot/poses")[1]["poses"]]
+    check("both are listed", n1 in names and n2 in names, str(names))
+    s, r = call(B, "GET", f"/control/goto_pose?name={quote(n1)}&dry_run=1")
+    check("preview does not move", s == 200 and r["outcome"] == "planned" and off(b) < 0.01, f"{s} {r.get('outcome')}")
+    s, r = call(B, "GET", f"/control/goto_pose?name={quote(n1)}&velocity=0.5")
+    check("go to the first pose", s == 200 and r["outcome"] == "success" and off(a) < 0.05, f"{s} {r.get('outcome')} off {off(a):.3f} deg")
+    s, r = call(B, "GET", f"/control/goto_pose?name={quote(n2)}&velocity=0.5")
+    check("go to the second pose", s == 200 and r["outcome"] == "success" and off(b) < 0.05, f"{s} off {off(b):.3f} deg")
+    s, r = call(B, "POST", "/robot/poses", {"name": n1, "overwrite": True})
+    check("overwrite replaces it", s == 200 and max(abs(x - y) for x, y in zip(r["joints_deg"], b)) < 0.05, str(s))
+    call(B, "GET", "/control/gripper_open")
+    s, r = call(B, "GET", f"/control/goto_pose?name={quote(n2)}&require_object=1")
+    check("require_object applies", s == 409 and r["error"] == "object_not_held", f"{s} {r.get('error')}")
+    s, _ = call(B, "GET", "/control/goto_pose?name=nothing-here")
+    check("unknown pose -> 404", s == 404, str(s))
+    for bad in ("", "   ", "../../etc/x", "<script>", "x" * 41, 5):
+        s, _ = call(B, "POST", "/robot/poses", {"name": bad})
+        check(f"bad name {str(bad)[:12]!r} -> 400", s == 400, str(s))
+    for n in (n1, n2):
+        s, _ = call(B, "DELETE", "/robot/poses/" + quote(n))
+        check(f"delete {n}", s == 200, str(s))
+    s, _ = call(B, "DELETE", "/robot/poses/" + quote(n1))
+    check("delete again -> 404", s == 404, str(s))
+
+
 def access(B):
     if call(B, "GET", "/state", auth=False)[0] == 200:
         check("UR_API_AUTH=off: /help says the API is open", "open" in call(B, "GET", "/help", auth=False)[1]["conventions"]["access"])
@@ -485,7 +528,7 @@ def grasp_check(B):
     call(B, "GET", "/control/gripper_open")
 
 
-GROUPS = {"access": access, "bad_requests": bad_requests, "home": home, "grasp_check": grasp_check, "gripper_buttons": gripper_buttons, "busy_display": busy_display, "rotate": rotate, "motion": motion,
+GROUPS = {"access": access, "bad_requests": bad_requests, "home": home, "grasp_check": grasp_check, "gripper_buttons": gripper_buttons, "busy_display": busy_display, "named_poses": named_poses, "rotate": rotate, "motion": motion,
           "gripper": gripper, "scene": scene, "plan": plan, "misc": misc}
 
 if __name__ == "__main__":

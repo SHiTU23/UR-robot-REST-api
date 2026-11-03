@@ -49,7 +49,7 @@ def _unhandled(e):
     return jsonify({"error": type(e).__name__, "message": str(e)}), 500
 
 
-DRY_RUN_PATHS = {"/control/goto_joints", "/control/plan_cartesian_path", "/control/rotate_tcp"}
+DRY_RUN_PATHS = {"/control/goto_joints", "/control/goto_pose", "/control/plan_cartesian_path", "/control/rotate_tcp"}
 
 
 # Safety gate for every motion endpoint (rules S2 + S4): refuse while the scene is dirty (a commit could not
@@ -250,6 +250,7 @@ def build():
     state_dir = os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state"))
     os.makedirs(state_dir, exist_ok=True)
     C.home_path = os.path.join(state_dir, "home.json")
+    C.poses_path = os.path.join(state_dir, "poses.json")
     cell.load_saved_home(C.home_path)
     C.store = FileStore(os.environ.get("UR_FILES_ROOT", os.path.join(ROOT, "data")),
                         max_file_bytes=int(os.environ.get("UR_FILES_MAX_BYTES", 100 * 2 ** 20)),

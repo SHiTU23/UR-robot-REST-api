@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 
 import numpy as np
@@ -30,7 +31,7 @@ ACTIVITY = {"/control/gripper_open": "Opening gripper", "/control/gripper_close"
             "/control/gripper_open_force": "Moving gripper", "/control/go_to_gripper_state": "Moving gripper",
             "/control/gripper_grasp": "Grasping", "/control/gripper_homing": "Opening gripper",
             "/control/plan_cartesian_path": "Moving arm", "/control/plan_joint_path": "Moving arm",
-            "/control/goto_joints": "Moving arm", "/control/rotate_tcp": "Rotating tool", "/control/home": "Moving home",
+            "/control/goto_joints": "Moving arm", "/control/goto_pose": "Moving to saved pose", "/control/rotate_tcp": "Rotating tool", "/control/home": "Moving home",
             "/control/nudge_joint": "Moving a joint", "/control/resume": "Resuming the move"}
 
 
@@ -682,12 +683,38 @@ def goto_joints():
         return jsonify({"error": e.code, "msg": e.msg}), e.status
     if not C.lock.acquire(blocking=False):
         return busy()
+    C.activity = {"what": "Planning" if g["dry_run"] else "Moving arm", "since": time.time()}
     try:
         if not g["dry_run"]:
             _remember(kind="joints", g=g)
         return do_goto(g)
     finally:
+        C.activity = None
         C.lock.release()
+
+
+@bp.route("/control/goto_pose", methods=["GET"])
+@with_lock
+def goto_pose():
+    """Move to a pose saved with POST /robot/poses: name=<name>, velocity=0.2 (0.01..0.5), max_joint_travel_deg=100
+    (big-swing guard; 0 disables), auto_recover=1, max_retries=1. Same planner and checks as /control/goto_joints.
+    dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
+    pose = _load_poses().get(request.args.get("name", ""))
+    if pose is None:
+        raise err(404, "unknown_pose", f"no saved pose named {request.args.get('name', '')!r}; GET /robot/poses lists them")
+    try:
+        velocity = float(request.args.get("velocity", "0.2"))
+        if not 0.01 <= velocity <= 0.5:
+            raise ValueError("velocity must be in 0.01..0.5")
+        g = {"target": [float(v) for v in pose["joints_rad"]], "unit": "rad", "velocity": velocity,
+             "max_travel": parse_max_travel(), "auto_recover": _flag(request.args.get("auto_recover")),
+             "max_retries": int(request.args.get("max_retries", "1")),
+             "dry_run": _flag(request.args.get("dry_run", "0"), False)}
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": "bad goto_pose args", "msg": str(e)}), 400
+    if not g["dry_run"]:
+        _remember(kind="joints", g=g)
+    return do_goto(g)
 
 
 @bp.route("/control/resume", methods=["GET"])
@@ -744,6 +771,92 @@ def home():
                     "plan_error_codes": r.get("plan_error_codes"), "last_error": last_error()}), 500
 
 
+def _pose_to_save():
+    """The current joints, if they make a usable saved pose: 409 while moving, near a joint limit or in collision."""
+    q = C.motion.current_q()
+    js = C.ros.joint_state(C.cell.arm_joints)
+    speed = max(abs(js[n][1] or 0.0) for n in C.cell.arm_joints)
+    if speed > 0.01:
+        raise err(409, "arm_moving", f"the arm is moving ({speed:.3f} rad/s); save the pose once it stands still")
+    near = C.cell.near_limits(q)
+    if near:
+        raise err(409, "joint_near_limit", "this pose is too close to a joint limit: " +
+                  ", ".join(b["name"] for b in near))
+    valid, contacts = C.motion.check_state(q)
+    if not valid:
+        raise err(409, "in_collision", "this pose collides with the planning scene: " +
+                  "; ".join(C.motion.contact_pairs(contacts)))
+    return [float(v) for v in q]
+
+
+POSE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,39}")
+
+
+def _load_poses():
+    """{name: {joints_rad, saved_at}} from the state directory. A damaged file is an error, so saving cannot wipe it."""
+    try:
+        with open(C.poses_path) as f:
+            d = json.load(f)
+        if not isinstance(d, dict):
+            raise ValueError("not an object")
+        return d
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise err(500, "poses_file_damaged", f"{C.poses_path} cannot be read: {e}")
+
+
+def _write_poses(poses):
+    tmp = C.poses_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(poses, f, indent=1)
+    os.replace(tmp, C.poses_path)
+
+
+def _pose_entry(name, p):
+    q = [float(v) for v in p["joints_rad"]]
+    return {"name": name, "joints_rad": q, "joints_deg": [round(math.degrees(v), 2) for v in q],
+            "tcp": tcp_pose(q), "saved_at": p.get("saved_at")}
+
+
+@bp.route("/robot/poses", methods=["GET"])
+def poses_list():
+    """The saved named poses: {poses: [{name, joints_rad, joints_deg, tcp {position, orientation}, saved_at}]}."""
+    return jsonify({"poses": [_pose_entry(n, p) for n, p in sorted(_load_poses().items(), key=lambda kv: kv[0].lower())]}), 200
+
+
+@bp.route("/robot/poses", methods=["POST"])
+@with_lock
+def poses_save():
+    """Save the arm's CURRENT joints under a name: JSON {"name": "pick 1", "overwrite": false}. Letters, digits, space,
+    _ . - (up to 40). Kept across restarts. Does not move the arm. 409 if the name exists without overwrite, or while
+    the arm moves, near a joint limit or in collision. Go there with GET /control/goto_pose?name=."""
+    d = request.get_json(silent=True)
+    name = d.get("name") if isinstance(d, dict) else None
+    name = name.strip() if isinstance(name, str) else ""
+    if not POSE_NAME.fullmatch(name):
+        raise err(400, "bad_name", "name needs 1 to 40 characters: letters, digits, space, _ . - (starting with a letter or digit)")
+    poses = _load_poses()
+    if name in poses and d.get("overwrite") is not True:
+        raise err(409, "pose_exists", f"a pose named {name!r} exists; send overwrite=true to replace it")
+    poses[name] = {"joints_rad": _pose_to_save(), "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    _write_poses(poses)
+    log.info("pose %r saved: %s", name, poses[name]["joints_rad"])
+    return jsonify({"status": "saved", **_pose_entry(name, poses[name])}), 200
+
+
+@bp.route("/robot/poses/<name>", methods=["DELETE"])
+@with_lock
+def poses_delete(name):
+    """Delete a saved pose. Does not move the arm."""
+    poses = _load_poses()
+    if name not in poses:
+        raise err(404, "unknown_pose", f"no saved pose named {name!r}")
+    del poses[name]
+    _write_poses(poses)
+    return jsonify({"status": "deleted", "name": name}), 200
+
+
 def _home_body():
     c = C.cell
     return {"home_rad": c.home_q, "home_deg": [math.degrees(v) for v in c.home_q],
@@ -762,19 +875,7 @@ def home_get():
 def home_save():
     """Save the arm's CURRENT joints as the home pose (kept across restarts in the state directory). Does not move
     the arm. Refused (409) while the arm moves, near a joint limit, or in collision with the planning scene."""
-    q = C.motion.current_q()
-    js = C.ros.joint_state(C.cell.arm_joints)
-    speed = max(abs(js[n][1] or 0.0) for n in C.cell.arm_joints)
-    if speed > 0.01:
-        raise err(409, "arm_moving", f"the arm is moving ({speed:.3f} rad/s); save the home pose once it stands still")
-    near = C.cell.near_limits(q)
-    if near:
-        raise err(409, "joint_near_limit", "this pose is too close to a joint limit: " +
-                  ", ".join(b["name"] for b in near))
-    valid, contacts = C.motion.check_state(q)
-    if not valid:
-        raise err(409, "in_collision", "this pose collides with the planning scene: " +
-                  "; ".join(C.motion.contact_pairs(contacts)))
+    q = _pose_to_save()
     c = C.cell
     saved_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     tmp = C.home_path + ".tmp"

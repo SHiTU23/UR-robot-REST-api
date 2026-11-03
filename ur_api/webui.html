@@ -57,6 +57,12 @@
     <div class="row"><button id="b-recover">Recover</button><button id="b-home">Home</button>
       <button id="b-sethome">Save current pose as home</button><button id="b-resethome">Reset home</button>
       <label class="mut"><input type="checkbox" id="ubase" style="width:auto"> show pendant "base" frame</label></div>
+    <h2 style="margin-top:12px">Saved poses</h2>
+    <div class="row"><input id="pname" style="width:150px" maxlength="40" placeholder="name for this pose">
+      <button id="b-savepose">Save current pose</button></div>
+    <div class="row"><select id="posesel" style="width:150px"></select>
+      <button id="b-gotopose" class="pri">Go</button><button id="b-drypose">Preview</button><button id="b-delpose">Delete</button></div>
+    <p class="mut" id="poseinfo"></p>
   </section>
   <section>
     <h2>Jog (straight line, TCP)</h2>
@@ -131,7 +137,7 @@ async function api(path, opts = {}) {
   return { status: r.status, body };
 }
 // While an action runs, its buttons are disabled and the header says what it is. STOP stays enabled.
-const ACTIONS = "[data-j],[data-r],#b-open,#b-full,#b-close,#b-grasp,#b-goto,#b-dry,#b-home,#b-sethome,#b-resethome,#b-recover,#b-down";
+const ACTIONS = "[data-j],[data-r],#b-open,#b-full,#b-close,#b-grasp,#b-goto,#b-dry,#b-home,#b-sethome,#b-resethome,#b-recover,#b-down,#b-savepose,#b-gotopose,#b-drypose,#b-delpose";
 let localAction = null;
 function showBusy(text) {
   document.querySelectorAll(ACTIONS).forEach((b) => { b.disabled = !!text; });
@@ -143,7 +149,7 @@ let missWidth = null;      // the finger width when the "object missed" warning 
 function clearMissed() { $("g-warn").textContent = ""; missWidth = null; }
 async function act(label, path, opts) {
   if (path.includes("gripper")) clearMissed();
-  const locking = path !== "/control/stop" && (path.startsWith("/control/") || path === "/recover" || path.startsWith("/robot/home"));
+  const locking = path !== "/control/stop" && (path.startsWith("/control/") || path === "/recover" || path.startsWith("/robot/home") || path.startsWith("/robot/poses"));
   log(`${label} …`);
   if (locking) { localAction = { label, t0: Date.now() }; showBusy(label); }
   let status, body;
@@ -151,7 +157,7 @@ async function act(label, path, opts) {
   finally { if (locking) { localAction = null; showBusy(null); } }
   if (status === 409 && body.activity) log(`${label}: ignored, still busy: ${body.activity.what}`);
   const o = body.outcome || body.status || body.error || "";
-  log(`${label}: ${status} ${o} ${body.msg || body.error_msg || (body.outcome ? body.error : "") || ""}`);
+  log(`${label}: ${status} ${o} ${body.msg || body.error_msg || (body.outcome ? body.error : "") || ""} ${status >= 400 && body.hint ? body.hint : ""}`);
   refresh();
   return body;
 }
@@ -165,6 +171,41 @@ $("b-sethome").onclick = () => {
   if (confirm(`Save the current pose as the home pose?\n${deg} deg\nThe arm will not move.`)) act("save home", "/robot/home", { method: "POST" });
 };
 $("b-resethome").onclick = () => confirm("Go back to the home pose from cell.yaml?") && act("reset home", "/robot/home", { method: "DELETE" });
+let poses = [];
+function selectedPose() { return poses.find((p) => p.name === $("posesel").value); }
+function showPoseInfo() {
+  const p = selectedPose();
+  $("poseinfo").textContent = p ? `${p.joints_deg.join(", ")} deg` : "No saved poses yet: move the arm, type a name, press Save.";
+}
+async function loadPoses(pick) {
+  const { status, body } = await api("/robot/poses");
+  if (status !== 200) return;
+  const keep = pick || $("posesel").value;
+  poses = body.poses;
+  const sel = $("posesel");
+  sel.replaceChildren(...poses.map((p) => { const o = document.createElement("option"); o.textContent = p.name; o.value = p.name; return o; }));
+  if (poses.some((p) => p.name === keep)) sel.value = keep;
+  showPoseInfo();
+}
+$("posesel").onchange = showPoseInfo;
+$("b-savepose").onclick = async () => {
+  const name = $("pname").value.trim();
+  if (!name) { log("saved poses: type a name first"); return; }
+  const exists = poses.some((p) => p.name === name);
+  if (exists && !confirm(`Replace the saved pose "${name}" with the current pose?`)) return;
+  const r = await act(`save pose "${name}"`, "/robot/poses", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, overwrite: exists }) });
+  if (r.status === "saved") { $("pname").value = ""; await loadPoses(name); }
+};
+const poseUrl = (p, extra = "") => `/control/goto_pose?name=${encodeURIComponent(p.name)}&velocity=${$("vel").value}${extra}`;
+$("b-gotopose").onclick = () => { const p = selectedPose();
+  if (p && confirm(`Move the arm to "${p.name}"?\n${p.joints_deg.join(", ")} deg\nSpeed ${$("vel").value}`)) act(`go to "${p.name}"`, poseUrl(p)); };
+$("b-drypose").onclick = async () => { const p = selectedPose(); if (!p) return;
+  const r = await act(`preview "${p.name}"`, poseUrl(p, "&dry_run=1"));
+  if (r.duration_s) log(`  planner ${r.planner_used}, ${fmt(r.duration_s, 1)} s, travel ${JSON.stringify(r.joint_travel_deg)}; shown in RViz`); };
+$("b-delpose").onclick = async () => { const p = selectedPose();
+  if (p && confirm(`Delete the saved pose "${p.name}"?`)) { await act(`delete pose "${p.name}"`, `/robot/poses/${encodeURIComponent(p.name)}`, { method: "DELETE" }); await loadPoses(); } };
+loadPoses();
 let last = null;
 document.querySelectorAll("[data-j]").forEach((b) => b.onclick = () => {
   if (!last) return;
