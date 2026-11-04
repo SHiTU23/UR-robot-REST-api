@@ -17,7 +17,7 @@ robot:
 tool:
   # TCP = fingertip centre with the gripper closed. It is not set here: it follows from the gripper model,
   # flange -> changer_length_m -> gripper mount face -> closed fingertips (config/grippers/<model>.yaml table).
-  finger_axis: x                   # the fingers close along tool0 x (re-checked 2026-09-16)
+  finger_axis: x                   # tool0 axis the gripper is lined up with before its mount_yaw_rad (config/grippers/)
   changer_radius_m: 0.0375         # MEASURE: flange + tool changer as one cylinder (radius only; its length is known)
   # Told by the operator 2026-11-02: flange 10 mm + tool changer parts 51 mm = 61 mm, the same for every gripper.
   # The RG6 is then 261 mm to its closed fingertips, TCP 322 mm (config/grippers/rg6.yaml has the model correction).

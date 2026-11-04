@@ -42,23 +42,48 @@ def camera_info():
 
 @bp.route("/camera/config", methods=["GET"])
 def camera_config():
-    """Without params: the current configuration. With width=&height=&fps=: restart the stream in that colour mode,
-    validated on the device; on failure the previous one is restored (400). Depth is aligned to colour."""
-    w, h, fps = (request.args.get(k) for k in ("width", "height", "fps"))
-    if not any((w, h, fps)):
+    """Without params: the current configuration and the modes the camera offers. With params: restart the stream,
+    validated on the device; on failure the previous settings are restored (400). Until the next restart of the server;
+    keep them with camera.width/height/fps/depth_width/depth_height/align_depth in cell.yaml.
+    Colour: width=, height=. Depth sensor: depth_width= and depth_height= together, or depth=auto (the largest).
+    Both streams use fps=. align=1 (default) resamples depth onto the colour image, so depth comes out at the COLOUR
+    size and (u,v) indexes both. align=0 gives depth at its own resolution, with its own intrinsics (depth_intrinsics in
+    /camera/info; depth_fx.. in /camera/frame); (u,v) then differ between the images."""
+    a = request.args
+    w, h, fps, dw, dh, depth, align = (a.get(k) for k in ("width", "height", "fps", "depth_width", "depth_height", "depth", "align"))
+    if not any((w, h, fps, dw, dh, depth, align)):
+        cam = C.camera.info()
         return jsonify({"current": {"width": C.camera.width, "height": C.camera.height, "fps": C.camera.fps,
-                                    "streaming": C.camera.info()["streaming"]},
+                                    "depth_mode": cam["depth_mode"], "depth_sensor_res": cam["depth_sensor_res"],
+                                    "depth_image_res": cam.get("depth_image_res"), "aligned_to_color": cam["aligned_to_color"],
+                                    "streaming": cam["streaming"]},
                         "supported_modes": C.camera.supported_modes()}), 200
     try:
         vals = {k: int(v) for k, v in (("width", w), ("height", h), ("fps", fps)) if v is not None}
         if any(not 0 < v <= 4096 for v in vals.values()):
             raise ValueError
+        if (dw is None) != (dh is None):
+            raise ValueError
+        if depth not in (None, "auto") or (depth and dw):
+            raise ValueError
+        if dw is not None:
+            vals["depth"] = (int(dw), int(dh))
+            if not all(0 < v <= 4096 for v in vals["depth"]):
+                raise ValueError
+        elif depth:
+            vals["depth"] = "auto"
+        if align is not None:
+            if align not in ("0", "1"):
+                raise ValueError
+            vals["align"] = align == "1"
     except (TypeError, ValueError):
-        return jsonify({"error": "width/height/fps must be positive integers"}), 400
+        return jsonify({"error": "bad camera config", "msg": "width, height, fps, depth_width, depth_height: positive integers; "
+                        "depth_width and depth_height together; depth=auto instead of them; align=0|1"}), 400
     ok, e = C.camera.set_config(**vals)
     if not ok:
         return jsonify({"error": "config_rejected", "msg": e, "restored": {"width": C.camera.width,
-                        "height": C.camera.height, "fps": C.camera.fps}}), 400
+                        "height": C.camera.height, "fps": C.camera.fps, "depth_mode": C.camera.info()["depth_mode"],
+                        "aligned_to_color": C.camera.align}}), 400
     return jsonify({"status": "reconfigured", **C.camera.info()}), 200
 
 
@@ -83,6 +108,33 @@ def _image(img, fmt, quality):
         return ok, buf, "image/png"
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, max(1, min(100, quality))])
     return ok, buf, "image/jpeg"
+
+
+@bp.route("/camera/exposure", methods=["GET"])
+def camera_exposure():
+    """The colour stream's exposure. Without params: {auto, exposure, gain, exposure_range, gain_range}, read from the
+    camera. To change: auto=1 lets the camera decide; exposure=<n> and/or gain=<n> set them by hand (auto turns off, or
+    send auto=0). Values are in the camera's own units, within the ranges it reports (400 outside them). Changing them
+    does not affect the depth stream. Lasts until the server restarts; keep it with camera.auto_exposure/exposure/gain
+    in cell.yaml."""
+    r = _started()
+    if r:
+        return r
+    a = request.args
+    try:
+        auto = {None: None, "1": True, "0": False}[a.get("auto")]
+        exposure = None if a.get("exposure") is None else int(a["exposure"])
+        gain = None if a.get("gain") is None else int(a["gain"])
+    except (KeyError, ValueError):
+        return jsonify({"error": "bad exposure args", "msg": "auto=0|1; exposure and gain: integers"}), 400
+    try:
+        if auto is None and exposure is None and gain is None:
+            return jsonify(C.camera.get_exposure()), 200
+        return jsonify({"status": "set", **C.camera.set_exposure(auto, exposure, gain)}), 200
+    except NotImplementedError as e:
+        return jsonify({"error": "not_supported", "msg": str(e)}), 501
+    except ValueError as e:
+        return jsonify({"error": "bad exposure args", "msg": str(e)}), 400
 
 
 @bp.route("/camera/color", methods=["GET"])
@@ -112,7 +164,7 @@ def camera_color():
 
 @bp.route("/camera/depth", methods=["GET"])
 def camera_depth():
-    """Latest depth aligned to colour as a 16-bit PNG in MILLIMETRES (0 = no data), lossless."""
+    """Latest depth as a 16-bit PNG in MILLIMETRES (0 = no data), lossless. Aligned to colour unless align=0 was set."""
     r = _started()
     if r:
         return r
@@ -132,7 +184,8 @@ def camera_depth():
 @bp.route("/camera/frame", methods=["GET"])
 def camera_frame():
     """Colour + depth from the SAME frameset: a compressed .npz with color_bgr (HxWx3 u8), depth_mm (HxW u16),
-    frame_id, ts, fx, fy, ppx, ppy, depth_scale_m. np.load(io.BytesIO(resp.content))."""
+    frame_id, ts, fx, fy, ppx, ppy (colour), depth_fx, depth_fy, depth_ppx, depth_ppy, aligned_to_color, depth_scale_m.
+    np.load(io.BytesIO(resp.content))."""
     r = _started()
     if r:
         return r
@@ -142,7 +195,9 @@ def camera_frame():
     bio = io.BytesIO()
     np.savez_compressed(bio, color_bgr=b["color"], depth_mm=b["depth_mm"], frame_id=np.int64(b["id"]),
                         ts=np.float64(b["ts"]), fx=np.float64(b["fx"]), fy=np.float64(b["fy"]),
-                        ppx=np.float64(b["ppx"]), ppy=np.float64(b["ppy"]), depth_scale_m=np.float64(b["depth_scale_m"]))
+                        ppx=np.float64(b["ppx"]), ppy=np.float64(b["ppy"]), depth_fx=np.float64(b["depth_fx"]), depth_fy=np.float64(b["depth_fy"]),
+                        depth_ppx=np.float64(b["depth_ppx"]), depth_ppy=np.float64(b["depth_ppy"]),
+                        aligned_to_color=np.bool_(b["aligned_to_color"]), depth_scale_m=np.float64(b["depth_scale_m"]))
     resp = Response(bio.getvalue(), mimetype="application/octet-stream")
     resp.headers["Content-Disposition"] = f"attachment; filename=frame_{b['id']}.npz"
     resp.headers["X-Frame-Id"], resp.headers["X-Frame-TS"] = str(b["id"]), repr(b["ts"])

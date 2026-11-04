@@ -81,7 +81,10 @@ def frame_to_base_link(frame):
         return np.eye(4)
     if frame == "base":
         return geom.T_BASELINK_BASE
-    raise err(400, "bad_frame", f"frame must be {C.cell.base_frame} (default) or base (the pendant frame)")
+    if frame == "room":
+        return geom.rot_z(-C.cell.room_yaw_rad)
+    raise err(400, "bad_frame", f"frame must be {C.cell.base_frame} (default), base (the pendant frame) or room "
+              "(robot.room_yaw_deg in the cell config)")
 
 
 def parse_orientation():
@@ -259,6 +262,8 @@ def get_state():
         "position": dict(zip("xyz", p["position"])), "orientation": dict(zip("xyzw", p["orientation"])),
         "gripper": 1 if (w is not None and w > C.cell.open_threshold) else 0, "gripper_width_m": w,
         "object_held": C.gripper.holding,
+        "room": {"position": [float(v) for v in (geom.rot_z(C.cell.room_yaw_rad) @ T)[:3, 3]],
+                 "yaw_deg": math.degrees(C.cell.room_yaw_rad), "note": "the TCP along the room's axes (robot.room_yaw_deg)"},
         "joints": list(q), "rpy_deg": {"roll": math.degrees(r), "pitch": math.degrees(pt), "yaw": math.degrees(y)},
         "frame_id": C.cell.base_frame, "tcp_link": C.cell.tcp_link,
         "ur_base": {"position": [float(v) for v in Tb[:3, 3]], "orientation": geom.matrix_to_quat(Tb),
@@ -479,8 +484,8 @@ def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None):
 @bp.route("/control/plan_cartesian_path", methods=["GET"])
 @with_lock
 def plan_cartesian_path():
-    """Straight-line (MoveL) TCP move to ABSOLUTE x,y,z (metres; frame=base_link default, or frame=base for the
-    pendant frame). Orientation: roll&pitch&yaw (degrees, sxyz; straight down = 180,0,0) or qx&qy&qz&qw;
+    """Straight-line (MoveL) TCP move to ABSOLUTE x,y,z (metres; frame=base_link default, frame=base for the
+    pendant frame, or frame=room for the room's axes). Orientation: roll&pitch&yaw (degrees, sxyz; straight down = 180,0,0) or qx&qy&qz&qw;
     else preserve_orientation=1 keeps the current one, 0 resets to straight down. velocity=0.05 (scaling),
     auto_recover=1, max_retries=1, max_joint_travel_deg=100 (big-swing guard, wrist_3 exempt; 0 disables).
     dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
@@ -502,7 +507,7 @@ def plan_cartesian_path():
 @with_lock
 def rotate_tcp():
     """Turn the TCP about one of its axes while its position stays put: axis=x|y|z, deg=<signed, up to 45> (from the
-    current orientation), frame=base_link (default, axes of the robot base) | base (pendant frame) | tool (the TCP's own
+    current orientation), frame=base_link (default, axes of the robot base) | base (pendant frame) | room (robot.room_yaw_deg) | tool (the TCP's own
     axes, which turn with it). velocity=0.05, auto_recover=1, max_retries=1, max_joint_travel_deg=100; dry_run=1 plans
     only, shows the plan in RViz and reports tcp_drift_from_start_mm. WARNING: moves the arm (unless dry_run=1)."""
     try:
@@ -513,8 +518,8 @@ def rotate_tcp():
         if not math.isfinite(deg) or not 0 < abs(deg) <= ROTATE_MAX_DEG:
             raise ValueError(f"deg must be a non-zero number up to +-{ROTATE_MAX_DEG:g}")
         frame = request.args.get("frame", C.cell.base_frame)
-        if frame not in (C.cell.base_frame, "base", "tool"):
-            raise ValueError(f"frame must be {C.cell.base_frame}, base or tool")
+        if frame not in (C.cell.base_frame, "base", "room", "tool"):
+            raise ValueError(f"frame must be {C.cell.base_frame}, base, room or tool")
         vel = float(request.args.get("velocity", "0.05"))
         if not 0.01 <= vel <= 0.5:
             raise ValueError("velocity must be in 0.01..0.5")
@@ -528,6 +533,9 @@ def rotate_tcp():
     if frame == "base" and axis in ("x", "y"):      # the pendant frame's x and y are base_link's negated
         a = -a
     Rd = geom.euler_to_matrix(*{"x": (a, 0, 0), "y": (0, a, 0), "z": (0, 0, a)}[axis])
+    if frame == "room":
+        Rz = geom.rot_z(C.cell.room_yaw_rad)[:3, :3]
+        Rd = Rz.T @ Rd @ Rz
     R1 = R0 @ Rd if frame == "tool" else Rd @ R0
     x, y, z = start["position"]
     m = {"x": x, "y": y, "z": z, "auto_recover": _flag(request.args.get("auto_recover")), "max_retries": retries,

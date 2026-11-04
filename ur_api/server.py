@@ -121,7 +121,8 @@ def api_help():
         "conventions": {
             "units": "metres, newtons, N*m, radians (unit=deg where offered); positions absolute",
             "frames": f"{C.cell.base_frame} (ROS). The pendant / RTDE 'base' frame is base_link turned 180 deg about "
-                      "z (x and y negated); motion endpoints take frame=base to use it",
+                      "z (x and y negated); motion endpoints take frame=base to use it, or "
+                      "frame=room for the room's axes (robot.room_yaw_deg)",
             "tcp": f"{C.cell.tcp_link}: fingertip centre with the gripper closed, {C.cell.tcp_z:.3f} m along tool0 z, "
                    f"x {C.cell.tcp_xy[0]:+.5f} y {C.cell.tcp_xy[1]:+.5f} m off the flange axis",
             "joints": C.cell.arm_joints,

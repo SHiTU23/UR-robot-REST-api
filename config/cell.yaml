@@ -9,6 +9,10 @@ robot:
   ip: 192.168.56.101               # controller IP, read from the arm 2026-11-02 (env UR_ROBOT_IP wins)
   # Home pose: recorded on the real arm right after eye_in_hand_home.urp (~/sota/ui/calibration/home_joints.json)
   home_joints_rad: [3.7456185817718506, -1.4083529573730011, -2.4207828044891357, -3.5637909374632777, -1.7516759077655237, 2.790925979614258]
+  # How the base is turned in the room, seen from above (+ = counter-clockwise). Used by RViz's view and by frame=room;
+  # base_link coordinates and saved poses do not change. The power cable is about 45 deg off the back of the robot
+  # (operator, 2026-11-04).
+  room_yaw_deg: 45
   joint_limit_margin_rad: 0.02     # motion refuses targets / paths closer than this to a joint limit
   max_joint_travel_deg: 100        # big-swing guard (any joint except wrist_3); 0 disables
   travel_exempt_joints: [wrist_3_joint]   # tool roll only spins the flange
@@ -17,7 +21,7 @@ robot:
 tool:
   # TCP = fingertip centre with the gripper closed. It is not set here: it follows from the gripper model,
   # flange -> changer_length_m -> gripper mount face -> closed fingertips (config/grippers/<model>.yaml table).
-  finger_axis: x                   # the fingers close along tool0 x (re-checked 2026-09-16)
+  finger_axis: x                   # tool0 axis the gripper is lined up with before its mount_yaw_rad (config/grippers/)
   changer_radius_m: 0.0375         # MEASURE: flange + tool changer as one cylinder (radius only; its length is known)
   # Told by the operator 2026-11-02: flange 10 mm + tool changer parts 51 mm = 61 mm, the same for every gripper.
   # The RG6 is then 261 mm to its closed fingertips, TCP 322 mm (config/grippers/rg6.yaml has the model correction).

@@ -47,6 +47,8 @@ class Cell:
         self.config_home_q = [float(v) for v in r["home_joints_rad"]]
         self.home_q = list(self.config_home_q)     # replaced by a saved home: load_saved_home, POST /robot/home
         self.home_saved_at = None
+        # How the base is turned in the room (seen from above, + counter-clockwise): RViz's view, and frame=room
+        self.room_yaw_rad = math.radians(float(r.get("room_yaw_deg", 0.0)))
         self.limit_margin = float(r.get("joint_limit_margin_rad", 0.02))
         self.max_travel_rad = math.radians(float(r.get("max_joint_travel_deg", 100)))
         self.travel_exempt = tuple(p + n for n in r.get("travel_exempt_joints", ["wrist_3_joint"]))

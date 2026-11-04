@@ -469,6 +469,38 @@ def named_poses(B):
     check("delete again -> 404", s == 404, str(s))
 
 
+def room_axes(B):
+    q = ",".join(str(v) for v in WORK_DEG)
+    call(B, "GET", f"/control/goto_joints?joints={q}&unit=deg&velocity=0.5&max_joint_travel_deg=0")
+    s0 = call(B, "GET", "/state")[1]
+    yaw = math.radians(s0["room"]["yaw_deg"])
+    px, py, pz = s0["room"]["position"]
+    bx, by = (s0["position"][k] for k in "xy")
+    s, r = call(B, "GET", f"/control/plan_cartesian_path?x={px}&y={py + 0.02}&z={pz}&frame=room&velocity=0.3")
+    time.sleep(0.2)
+    s1 = call(B, "GET", "/state")[1]
+    dx, dy = s1["position"]["x"] - bx, s1["position"]["y"] - by
+    ex, ey = 0.02 * math.sin(yaw), 0.02 * math.cos(yaw)
+    check("room +y moves along the room's y", s == 200 and math.hypot(dx - ex, dy - ey) < 1e-3, f"robot dx {dx:.4f} dy {dy:.4f}, expected {ex:.4f} {ey:.4f}")
+    rx, ry, rz = s1["room"]["position"]
+    check("/state room position agrees", abs(ry - py - 0.02) < 1e-3 and abs(rx - px) < 1e-3, f"room dx {rx - px:.4f} dy {ry - py:.4f}")
+    a0 = [s1["orientation"][k] for k in "xyzw"]
+    s, r = call(B, "GET", "/control/rotate_tcp?axis=z&deg=10&frame=room&velocity=0.3")
+    a1 = [call(B, "GET", "/state")[1]["orientation"][k] for k in "xyzw"]
+    check("rotate about the room's z", s == 200 and r["outcome"] == "success" and abs(quat_angle_deg(a0, a1) - 10) < 0.2, f"{quat_angle_deg(a0, a1):.2f} deg")
+    call(B, "GET", "/control/rotate_tcp?axis=z&deg=-10&frame=room&velocity=0.3")
+    s, r = call(B, "GET", "/control/rotate_tcp?axis=x&deg=10&frame=room&dry_run=1")
+    t = r.get("target_pose", {}).get("orientation")
+    half = math.radians(5)
+    ax = (math.cos(yaw) * math.sin(half), -math.sin(yaw) * math.sin(half), 0.0, math.cos(half))   # room x in the robot's frame
+    x1, y1, z1, w1 = ax
+    x2, y2, z2, w2 = a0
+    e = [w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2, w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2, w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2]
+    check("rotate about the room's x is about the turned axis", s == 200 and t and quat_angle_deg(e, t) < 0.2, f"{quat_angle_deg(e, t):.3f} deg off")
+    s, _ = call(B, "GET", f"/control/plan_cartesian_path?x={px}&y={py}&z={pz}&frame=moon")
+    check("unknown frame -> 400", s == 400, str(s))
+
+
 def access(B):
     if call(B, "GET", "/state", auth=False)[0] == 200:
         check("UR_API_AUTH=off: /help says the API is open", "open" in call(B, "GET", "/help", auth=False)[1]["conventions"]["access"])
@@ -528,7 +560,7 @@ def grasp_check(B):
     call(B, "GET", "/control/gripper_open")
 
 
-GROUPS = {"access": access, "bad_requests": bad_requests, "home": home, "grasp_check": grasp_check, "gripper_buttons": gripper_buttons, "busy_display": busy_display, "named_poses": named_poses, "rotate": rotate, "motion": motion,
+GROUPS = {"access": access, "bad_requests": bad_requests, "home": home, "grasp_check": grasp_check, "gripper_buttons": gripper_buttons, "busy_display": busy_display, "named_poses": named_poses, "room_axes": room_axes, "rotate": rotate, "motion": motion,
           "gripper": gripper, "scene": scene, "plan": plan, "misc": misc}
 
 if __name__ == "__main__":

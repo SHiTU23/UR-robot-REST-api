@@ -90,6 +90,9 @@ the API's limits all follow it. The tool changer, camera and bracket stay the sa
   closed. The 2F-85's move about 14 mm. The TCP is the closed position, so with open fingers the tips sit
   higher than the TCP. Grasp planning has to allow for that.
 - **Flange + tool changer are 61 mm** (10 + 51) for every gripper (`tool.changer_length_m`).
+- **The RG6 is turned -29.1 deg on the flange** (`mount_yaw_rad`): its fingers open parallel to the camera's long side.
+  The TCP frame is not turned, so it matches the pendant's TCP: to line the fingers up with a direction, turn the TCP
+  29.1 deg from it.
 - **The RG6 TCP is off-axis:** `tcp_xy_m` in `config/grippers/rg6.yaml` holds x -4.07 mm, y -5.19 mm from the TCP
   calibration (pendant TCP `hand_eye_tcp`). Recalibrating means updating it there.
 - **The RG6 model is too long:** 283.2 mm from base to closed fingertips, the real gripper about 261 mm. Its
@@ -148,6 +151,37 @@ emergency stop.
 last grasp was confirmed. `/state` and the panel show `object_held`. It needs the real width (pendant step 2 above);
 without that, `object_held` stays `null` and `require_object=1` refuses. The check runs when the grasp ends, so an
 object dropped later in the move is not noticed.
+
+## Camera resolution
+
+`GET /camera/config` lists the modes. Colour and depth are set separately, and both use the same `fps`:
+```
+/camera/config?width=1280&height=720&fps=30                        # colour
+/camera/config?depth_width=640&depth_height=400                    # depth sensor (depth=auto: the largest)
+/camera/config?align=0                                             # depth images at their own resolution
+```
+With `align=1` (default) depth is resampled onto the colour image, so it comes out at the colour size. A mode the camera
+rejects leaves the previous settings in place. Changes last until the server restarts; to keep them, set `camera.width`,
+`height`, `fps`, `depth_width`, `depth_height` and `align_depth` in `config/cell.yaml`.
+
+## Camera exposure
+
+```
+/camera/exposure                      # read: auto, exposure, gain and their ranges
+/camera/exposure?exposure=200&gain=20 # by hand (turns auto off)
+/camera/exposure?auto=1               # the camera decides
+```
+Colour stream only, in the camera's own units. The panel has the same controls. It lasts until the server restarts; to
+keep it, set `camera.auto_exposure`, `exposure` and `gain` in `config/cell.yaml`.
+
+## RViz view
+
+`robot.room_yaw_deg` in `config/cell.yaml` turns the robot against RViz's grid to match how it stands in the room (+ =
+counter-clockwise from above). Then `./run.sh rviz`.
+
+The same angle gives the room's axes: `frame=room` on `plan_cartesian_path`, `plan_joint_path` and `rotate_tcp`, and the
+panel's jog and rotate buttons (default). `/state` reports the TCP in them under `room`. Coordinates without `frame=room`
+are along the robot's own axes, and saved poses are unaffected. Angle set wrong, `+y` goes the wrong way.
 
 ## Home pose
 

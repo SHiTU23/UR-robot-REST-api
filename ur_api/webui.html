@@ -68,7 +68,8 @@
     <h2>Jog (straight line, TCP)</h2>
     <div class="row">step <select id="step"><option>0.005</option><option selected>0.01</option><option>0.02</option>
       <option>0.05</option><option>0.1</option></select> m &nbsp; speed <select id="vel"><option>0.02</option>
-      <option selected>0.05</option><option>0.1</option><option>0.2</option></select></div>
+      <option selected>0.05</option><option>0.1</option><option>0.2</option></select>
+      &nbsp; axes <select id="jframe" style="width:auto"><option value="room">room</option><option value="base_link">robot</option></select></div>
     <div class="jog">
       <button data-j="x+">x +</button><button data-j="y+">y +</button><button data-j="z+">z +</button>
       <button data-j="x-">x −</button><button data-j="y-">y −</button><button data-j="z-">z −</button>
@@ -76,13 +77,13 @@
     <h2 style="margin-top:12px">Rotate (TCP stays in place)</h2>
     <div class="row">step <select id="rstep"><option>1</option><option>2</option><option selected>5</option>
       <option>10</option><option>15</option></select> ° &nbsp; about <select id="rframe" style="width:auto">
-      <option value="base_link">base axes</option><option value="tool">tool axes</option></select></div>
+      <option value="room">room axes</option><option value="base_link">robot axes</option><option value="tool">tool axes</option></select></div>
     <div class="jog">
       <button data-r="x+">rot x +</button><button data-r="y+">rot y +</button><button data-r="z+">rot z +</button>
       <button data-r="x-">rot x −</button><button data-r="y-">rot y −</button><button data-r="z-">rot z −</button>
     </div>
     <div class="row"><button id="b-down">Point straight down</button></div>
-    <p class="mut">Moves the arm in base_link. Each press is one MoveL; STOP / Esc cancels.</p>
+    <p class="mut">Room axes follow the room; robot axes are turned with the base. Each press is one MoveL; STOP / Esc cancels.</p>
   </section>
   <section>
     <h2 id="g-title">Gripper</h2>
@@ -111,6 +112,10 @@
     <img class="cam" id="cam" alt="camera off">
     <div class="row"><button id="b-cam">Start view</button><select id="camview"><option>color</option>
       <option>depth</option></select></div>
+    <div class="row"><label><input type="checkbox" id="expo-auto" style="width:auto"> Auto exposure</label></div>
+    <div class="row">exposure <input id="expo-val" type="number" step="1"> gain <input id="expo-gain" type="number" step="1">
+      <button id="b-expo">Apply</button></div>
+    <p class="mut" id="expo-info"></p>
   </section>
   <section style="grid-column:1/-1">
     <h2>Log</h2>
@@ -215,8 +220,10 @@ let last = null;
 document.querySelectorAll("[data-j]").forEach((b) => b.onclick = () => {
   if (!last) return;
   const ax = b.dataset.j[0], sg = b.dataset.j[1] === "+" ? 1 : -1, st = parseFloat($("step").value);
-  const p = { ...last.position }; p[ax] += sg * st;
-  act(`jog ${b.dataset.j} ${st} m`, `/control/plan_cartesian_path?x=${p.x}&y=${p.y}&z=${p.z}&velocity=${$("vel").value}`);
+  const fr = $("jframe").value, room = fr === "room" && last.room;
+  const p = room ? { x: last.room.position[0], y: last.room.position[1], z: last.room.position[2] } : { ...last.position };
+  p[ax] += sg * st;
+  act(`jog ${b.dataset.j} ${st} m (${room ? "room" : "robot"} axes)`, `/control/plan_cartesian_path?x=${p.x}&y=${p.y}&z=${p.z}&velocity=${$("vel").value}${room ? "&frame=room" : ""}`);
 });
 document.querySelectorAll("[data-r]").forEach((b) => b.onclick = () => {
   const ax = b.dataset.r[0], sg = b.dataset.r[1] === "+" ? 1 : -1, st = parseFloat($("rstep").value), fr = $("rframe").value;
@@ -242,6 +249,24 @@ $("b-zero").onclick = () => act("zero sensor", "/force/zero_sensor");
 $("cam").onerror = async () => { if (!$("cam").getAttribute("src")) return; const { body } = await api("/camera/info");
   log(`camera: could not start: ${body.last_error || "see /camera/info"}`); };
 $("b-cam").onclick = () => { $("cam").src = `/camera/stream?view=${$("camview").value}&fps=10`; };
+function showExposure(b) {
+  if (b.exposure === undefined) return;
+  $("expo-auto").checked = b.auto;
+  // in auto the camera can report a gain just past its stated range
+  $("expo-val").value = b.exposure; $("expo-gain").value = Math.min(b.gain, b.gain_range.max);
+  $("expo-val").disabled = $("expo-gain").disabled = b.auto;
+  const er = b.exposure_range, gr = b.gain_range;
+  $("expo-val").min = er.min; $("expo-val").max = er.max; $("expo-gain").min = gr.min; $("expo-gain").max = gr.max;
+  $("expo-info").textContent = `Colour only. Exposure ${er.min}..${er.max}, gain ${gr.min}..${gr.max}.` + (b.auto ? " Untick Auto to set them by hand." : "");
+}
+async function exposure(query, label) {
+  const { status, body } = await api(`/camera/exposure${query}`);
+  if (status === 200) { showExposure(body); if (label) log(`${label}: exposure ${body.exposure}, gain ${body.gain}, auto ${body.auto}`); }
+  else { $("expo-info").textContent = `Exposure: ${body.msg || body.error || status}`; if (label) log(`${label}: ${status} ${body.msg || body.error || ""}`); }
+}
+$("expo-auto").onchange = () => { $("expo-auto").checked ? exposure("?auto=1", "auto exposure on") : exposure("?auto=0", "auto exposure off"); };
+$("b-expo").onclick = () => exposure(`?auto=0&exposure=${encodeURIComponent($("expo-val").value)}&gain=${encodeURIComponent($("expo-gain").value)}`, "exposure");
+exposure("");
 function pill(id, text, cls) { const e = $(id); e.textContent = text; e.className = "pill " + (cls || ""); }
 function rows(el, pairs) { el.innerHTML = pairs.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join(""); }
 async function refresh() {
@@ -255,7 +280,8 @@ async function refresh() {
       // the fingers moved some other way (another page, the API): the warning is out of date
       if (missWidth !== null && Math.abs((s.body.gripper_width_m ?? missWidth) - missWidth) > 0.002) clearMissed();
       pill("p-obj", held === true ? "object held" : held === false ? "no object" : "object not confirmed", held === true ? "ok" : held === false ? "" : "warn");
-      rows($("state"), [["TCP x y z (m)", `${fmt(P.x)} ${fmt(P.y)} ${fmt(P.z)} ${$("ubase").checked ? "(base)" : "(base_link)"}`],
+      const R = s.body.room && $("jframe").value === "room" && !$("ubase").checked ? { x: s.body.room.position[0], y: s.body.room.position[1], z: s.body.room.position[2] } : null;
+      rows($("state"), [["TCP x y z (m)", R ? `${fmt(R.x)} ${fmt(R.y)} ${fmt(R.z)} (room)` : `${fmt(P.x)} ${fmt(P.y)} ${fmt(P.z)} ${$("ubase").checked ? "(pendant base)" : "(robot)"}`],
         ["roll pitch yaw (°)", `${fmt(r.roll, 1)} ${fmt(r.pitch, 1)} ${fmt(r.yaw, 1)}`],
         ["gripper", `${s.body.gripper ? "open" : "closed"}, ${fmt(s.body.gripper_width_m * 1000, 1)} mm`]]);
     }

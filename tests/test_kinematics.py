@@ -37,6 +37,13 @@ class TestKinematics(unittest.TestCase):
         self.assertAlmostEqual(self.kin.T_tool0_tcp[0, 3], -0.00407, places=9)
         self.assertAlmostEqual(self.kin.T_tool0_tcp[1, 3], -0.00519, places=9)
 
+    def test_gripper_turned_on_the_flange(self):
+        # the fingers open parallel to the camera's long side
+        T = self.kin.urdf.fk("rg6_base_link", {}, "tool0")
+        closing = T[:3, :3] @ np.array([0.0, 1.0, 0.0])      # the RG6 model closes along its base y
+        camera = self.kin.urdf.fk("wrist_camera", {}, "tool0")[:3, 0]
+        self.assertGreater(abs(float(closing @ camera)), 0.999)
+
     def test_round_trip(self):
         rng = np.random.default_rng(1)
         worst_p = worst_r = 0.0
