@@ -76,8 +76,10 @@ def _frame_pose(pd, path):
     pose = canon_pose({k: v for k, v in pd.items() if k != "frame_id"}, path)
     if frame == "base":
         return geom.T_to_pose(geom.T_BASELINK_BASE @ geom.pose_to_T(pose))
+    if frame == "room":
+        return geom.T_to_pose(geom.rot_z(-C.cell.room_yaw_rad) @ geom.pose_to_T(pose))
     if frame not in (C.cell.base_frame, C.cell.planning_frame):
-        raise err(400, "bad_frame", f"pose.frame_id must be {C.cell.base_frame} (or base, the pendant frame)",
+        raise err(400, "bad_frame", f"pose.frame_id must be {C.cell.base_frame} (or base, the pendant frame, or room)",
                   f"{path}.frame_id")
     return pose
 

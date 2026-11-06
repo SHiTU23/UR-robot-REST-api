@@ -14,6 +14,9 @@ mount_offset_m: -0.0222
 # From the TCP calibration on this arm (pendant TCP hand_eye_tcp, 2026-11-02): how far the fingertip centre sits off
 # the flange axis, tool0 x and y. Both the gripper and the TCP shift by it. Pendant z was 0.322, rotation 0.
 tcp_xy_m: [-0.00407, -0.00519]
+# How far the gripper is turned on the flange, about tool0 z. The operator confirmed 2026-11-03 that the fingers open
+# parallel to the camera's long side, which the hand-eye calibration puts at -0.508 rad (-29.1 deg) from tool0 x.
+mount_yaw_rad: -0.508
 max_width_m: 0.160                      # datasheet stroke 0-160 mm (the model reaches 159 mm, see the table)
 min_force_n: 25.0                       # datasheet force range 25-120 N
 max_force_n: 120.0

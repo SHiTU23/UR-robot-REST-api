@@ -57,12 +57,19 @@
     <div class="row"><button id="b-recover">Recover</button><button id="b-home">Home</button>
       <button id="b-sethome">Save current pose as home</button><button id="b-resethome">Reset home</button>
       <label class="mut"><input type="checkbox" id="ubase" style="width:auto"> show pendant "base" frame</label></div>
+    <h2 style="margin-top:12px">Saved poses</h2>
+    <div class="row"><input id="pname" style="width:150px" maxlength="40" placeholder="name for this pose">
+      <button id="b-savepose">Save current pose</button></div>
+    <div class="row"><select id="posesel" style="width:150px"></select>
+      <button id="b-gotopose" class="pri">Go</button><button id="b-drypose">Preview</button><button id="b-delpose">Delete</button></div>
+    <p class="mut" id="poseinfo"></p>
   </section>
   <section>
     <h2>Jog (straight line, TCP)</h2>
     <div class="row">step <select id="step"><option>0.005</option><option selected>0.01</option><option>0.02</option>
       <option>0.05</option><option>0.1</option></select> m &nbsp; speed <select id="vel"><option>0.02</option>
-      <option selected>0.05</option><option>0.1</option><option>0.2</option></select></div>
+      <option selected>0.05</option><option>0.1</option><option>0.2</option></select>
+      &nbsp; axes <select id="jframe" style="width:auto"><option value="room">room</option><option value="base_link">robot</option></select></div>
     <div class="jog">
       <button data-j="x+">x +</button><button data-j="y+">y +</button><button data-j="z+">z +</button>
       <button data-j="x-">x −</button><button data-j="y-">y −</button><button data-j="z-">z −</button>
@@ -70,13 +77,13 @@
     <h2 style="margin-top:12px">Rotate (TCP stays in place)</h2>
     <div class="row">step <select id="rstep"><option>1</option><option>2</option><option selected>5</option>
       <option>10</option><option>15</option></select> ° &nbsp; about <select id="rframe" style="width:auto">
-      <option value="base_link">base axes</option><option value="tool">tool axes</option></select></div>
+      <option value="room">room axes</option><option value="base_link">robot axes</option><option value="tool">tool axes</option></select></div>
     <div class="jog">
       <button data-r="x+">rot x +</button><button data-r="y+">rot y +</button><button data-r="z+">rot z +</button>
       <button data-r="x-">rot x −</button><button data-r="y-">rot y −</button><button data-r="z-">rot z −</button>
     </div>
     <div class="row"><button id="b-down">Point straight down</button></div>
-    <p class="mut">Moves the arm in base_link. Each press is one MoveL; STOP / Esc cancels.</p>
+    <p class="mut">Room axes follow the room; robot axes are turned with the base. Each press is one MoveL; STOP / Esc cancels.</p>
   </section>
   <section>
     <h2 id="g-title">Gripper</h2>
@@ -105,6 +112,10 @@
     <img class="cam" id="cam" alt="camera off">
     <div class="row"><button id="b-cam">Start view</button><select id="camview"><option>color</option>
       <option>depth</option></select></div>
+    <div class="row"><label><input type="checkbox" id="expo-auto" style="width:auto"> Auto exposure</label></div>
+    <div class="row">exposure <input id="expo-val" type="number" step="1"> gain <input id="expo-gain" type="number" step="1">
+      <button id="b-expo">Apply</button></div>
+    <p class="mut" id="expo-info"></p>
   </section>
   <section style="grid-column:1/-1">
     <h2>Log</h2>
@@ -131,7 +142,7 @@ async function api(path, opts = {}) {
   return { status: r.status, body };
 }
 // While an action runs, its buttons are disabled and the header says what it is. STOP stays enabled.
-const ACTIONS = "[data-j],[data-r],#b-open,#b-full,#b-close,#b-grasp,#b-goto,#b-dry,#b-home,#b-sethome,#b-resethome,#b-recover,#b-down";
+const ACTIONS = "[data-j],[data-r],#b-open,#b-full,#b-close,#b-grasp,#b-goto,#b-dry,#b-home,#b-sethome,#b-resethome,#b-recover,#b-down,#b-savepose,#b-gotopose,#b-drypose,#b-delpose";
 let localAction = null;
 function showBusy(text) {
   document.querySelectorAll(ACTIONS).forEach((b) => { b.disabled = !!text; });
@@ -143,7 +154,7 @@ let missWidth = null;      // the finger width when the "object missed" warning 
 function clearMissed() { $("g-warn").textContent = ""; missWidth = null; }
 async function act(label, path, opts) {
   if (path.includes("gripper")) clearMissed();
-  const locking = path !== "/control/stop" && (path.startsWith("/control/") || path === "/recover" || path.startsWith("/robot/home"));
+  const locking = path !== "/control/stop" && (path.startsWith("/control/") || path === "/recover" || path.startsWith("/robot/home") || path.startsWith("/robot/poses"));
   log(`${label} …`);
   if (locking) { localAction = { label, t0: Date.now() }; showBusy(label); }
   let status, body;
@@ -151,7 +162,7 @@ async function act(label, path, opts) {
   finally { if (locking) { localAction = null; showBusy(null); } }
   if (status === 409 && body.activity) log(`${label}: ignored, still busy: ${body.activity.what}`);
   const o = body.outcome || body.status || body.error || "";
-  log(`${label}: ${status} ${o} ${body.msg || body.error_msg || (body.outcome ? body.error : "") || ""}`);
+  log(`${label}: ${status} ${o} ${body.msg || body.error_msg || (body.outcome ? body.error : "") || ""} ${status >= 400 && body.hint ? body.hint : ""}`);
   refresh();
   return body;
 }
@@ -165,12 +176,54 @@ $("b-sethome").onclick = () => {
   if (confirm(`Save the current pose as the home pose?\n${deg} deg\nThe arm will not move.`)) act("save home", "/robot/home", { method: "POST" });
 };
 $("b-resethome").onclick = () => confirm("Go back to the home pose from cell.yaml?") && act("reset home", "/robot/home", { method: "DELETE" });
+let poses = [];
+function selectedPose() { return poses.find((p) => p.name === $("posesel").value); }
+// Say why a press did nothing, next to the buttons
+function poseMsg(text) { const e = $("poseinfo"); e.textContent = text; e.style.color = "var(--bad)"; e.style.fontWeight = "600"; log(`saved poses: ${text}`); }
+function needPose() { const p = selectedPose(); if (!p) poseMsg("No pose to use yet. Type a name above and press Save current pose first."); return p; }
+function showPoseInfo() {
+  const p = selectedPose();
+  $("poseinfo").style.color = ""; $("poseinfo").style.fontWeight = "";
+  $("poseinfo").textContent = p ? `${p.joints_deg.join(", ")} deg` : "No saved poses yet: move the arm, type a name, press Save.";
+}
+async function loadPoses(pick) {
+  const { status, body } = await api("/robot/poses");
+  if (status !== 200) return;
+  const keep = pick || $("posesel").value;
+  poses = body.poses;
+  const sel = $("posesel");
+  sel.replaceChildren(...poses.map((p) => { const o = document.createElement("option"); o.textContent = p.name; o.value = p.name; return o; }));
+  if (poses.some((p) => p.name === keep)) sel.value = keep;
+  showPoseInfo();
+}
+$("posesel").onchange = showPoseInfo;
+$("b-savepose").onclick = async () => {
+  const name = $("pname").value.trim();
+  if (!name) { poseMsg("Type a name for this pose first."); $("pname").focus(); return; }
+  const exists = poses.some((p) => p.name === name);
+  if (exists && !confirm(`Replace the saved pose "${name}" with the current pose?`)) return;
+  const r = await act(`save pose "${name}"`, "/robot/poses", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, overwrite: exists }) });
+  if (r.status === "saved") { $("pname").value = ""; await loadPoses(name); }
+  else poseMsg(`Not saved: ${r.msg || r.error || "see the log"}`);
+};
+const poseUrl = (p, extra = "") => `/control/goto_pose?name=${encodeURIComponent(p.name)}&velocity=${$("vel").value}${extra}`;
+$("b-gotopose").onclick = () => { const p = needPose();
+  if (p && confirm(`Move the arm to "${p.name}"?\n${p.joints_deg.join(", ")} deg\nSpeed ${$("vel").value}`)) act(`go to "${p.name}"`, poseUrl(p)); };
+$("b-drypose").onclick = async () => { const p = needPose(); if (!p) return;
+  const r = await act(`preview "${p.name}"`, poseUrl(p, "&dry_run=1"));
+  if (r.duration_s) log(`  planner ${r.planner_used}, ${fmt(r.duration_s, 1)} s, travel ${JSON.stringify(r.joint_travel_deg)}; shown in RViz`); };
+$("b-delpose").onclick = async () => { const p = needPose();
+  if (p && confirm(`Delete the saved pose "${p.name}"?`)) { await act(`delete pose "${p.name}"`, `/robot/poses/${encodeURIComponent(p.name)}`, { method: "DELETE" }); await loadPoses(); } };
+loadPoses();
 let last = null;
 document.querySelectorAll("[data-j]").forEach((b) => b.onclick = () => {
   if (!last) return;
   const ax = b.dataset.j[0], sg = b.dataset.j[1] === "+" ? 1 : -1, st = parseFloat($("step").value);
-  const p = { ...last.position }; p[ax] += sg * st;
-  act(`jog ${b.dataset.j} ${st} m`, `/control/plan_cartesian_path?x=${p.x}&y=${p.y}&z=${p.z}&velocity=${$("vel").value}`);
+  const fr = $("jframe").value, room = fr === "room" && last.room;
+  const p = room ? { x: last.room.position[0], y: last.room.position[1], z: last.room.position[2] } : { ...last.position };
+  p[ax] += sg * st;
+  act(`jog ${b.dataset.j} ${st} m (${room ? "room" : "robot"} axes)`, `/control/plan_cartesian_path?x=${p.x}&y=${p.y}&z=${p.z}&velocity=${$("vel").value}${room ? "&frame=room" : ""}`);
 });
 document.querySelectorAll("[data-r]").forEach((b) => b.onclick = () => {
   const ax = b.dataset.r[0], sg = b.dataset.r[1] === "+" ? 1 : -1, st = parseFloat($("rstep").value), fr = $("rframe").value;
@@ -196,6 +249,24 @@ $("b-zero").onclick = () => act("zero sensor", "/force/zero_sensor");
 $("cam").onerror = async () => { if (!$("cam").getAttribute("src")) return; const { body } = await api("/camera/info");
   log(`camera: could not start: ${body.last_error || "see /camera/info"}`); };
 $("b-cam").onclick = () => { $("cam").src = `/camera/stream?view=${$("camview").value}&fps=10`; };
+function showExposure(b) {
+  if (b.exposure === undefined) return;
+  $("expo-auto").checked = b.auto;
+  // in auto the camera can report a gain just past its stated range
+  $("expo-val").value = b.exposure; $("expo-gain").value = Math.min(b.gain, b.gain_range.max);
+  $("expo-val").disabled = $("expo-gain").disabled = b.auto;
+  const er = b.exposure_range, gr = b.gain_range;
+  $("expo-val").min = er.min; $("expo-val").max = er.max; $("expo-gain").min = gr.min; $("expo-gain").max = gr.max;
+  $("expo-info").textContent = `Colour only. Exposure ${er.min}..${er.max}, gain ${gr.min}..${gr.max}.` + (b.auto ? " Untick Auto to set them by hand." : "");
+}
+async function exposure(query, label) {
+  const { status, body } = await api(`/camera/exposure${query}`);
+  if (status === 200) { showExposure(body); if (label) log(`${label}: exposure ${body.exposure}, gain ${body.gain}, auto ${body.auto}`); }
+  else { $("expo-info").textContent = `Exposure: ${body.msg || body.error || status}`; if (label) log(`${label}: ${status} ${body.msg || body.error || ""}`); }
+}
+$("expo-auto").onchange = () => { $("expo-auto").checked ? exposure("?auto=1", "auto exposure on") : exposure("?auto=0", "auto exposure off"); };
+$("b-expo").onclick = () => exposure(`?auto=0&exposure=${encodeURIComponent($("expo-val").value)}&gain=${encodeURIComponent($("expo-gain").value)}`, "exposure");
+exposure("");
 function pill(id, text, cls) { const e = $(id); e.textContent = text; e.className = "pill " + (cls || ""); }
 function rows(el, pairs) { el.innerHTML = pairs.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join(""); }
 async function refresh() {
@@ -209,7 +280,8 @@ async function refresh() {
       // the fingers moved some other way (another page, the API): the warning is out of date
       if (missWidth !== null && Math.abs((s.body.gripper_width_m ?? missWidth) - missWidth) > 0.002) clearMissed();
       pill("p-obj", held === true ? "object held" : held === false ? "no object" : "object not confirmed", held === true ? "ok" : held === false ? "" : "warn");
-      rows($("state"), [["TCP x y z (m)", `${fmt(P.x)} ${fmt(P.y)} ${fmt(P.z)} ${$("ubase").checked ? "(base)" : "(base_link)"}`],
+      const R = s.body.room && $("jframe").value === "room" && !$("ubase").checked ? { x: s.body.room.position[0], y: s.body.room.position[1], z: s.body.room.position[2] } : null;
+      rows($("state"), [["TCP x y z (m)", R ? `${fmt(R.x)} ${fmt(R.y)} ${fmt(R.z)} (room)` : `${fmt(P.x)} ${fmt(P.y)} ${fmt(P.z)} ${$("ubase").checked ? "(pendant base)" : "(robot)"}`],
         ["roll pitch yaw (°)", `${fmt(r.roll, 1)} ${fmt(r.pitch, 1)} ${fmt(r.yaw, 1)}`],
         ["gripper", `${s.body.gripper ? "open" : "closed"}, ${fmt(s.body.gripper_width_m * 1000, 1)} mm`]]);
     }

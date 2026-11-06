@@ -35,6 +35,10 @@ def grasp_verdict(width, target, eps_in, eps_out, min_object_width, width_given)
     """Judge a finished close from the MEASURED width (m): (object_held, outcome, error).
     With an expected object width, the fingers must stop within [target - eps_in, target + eps_out]. Without one
     (close until contact), they must stop on something: nearly fully closed means they met nothing."""
+    if width_given and target <= min_object_width and target - eps_in <= 0.0 and width <= min_object_width:
+        # width=0 asks to close on an object of unknown size; a tolerance around 0 must not accept fingers that met nothing
+        return False, "object_missed", (f"fingers closed to {width * 1000:.1f} mm (at most "
+                                        f"{min_object_width * 1000:.1f} mm counts as empty): object missed")
     if width_given:
         lo, hi = target - eps_in, target + eps_out
         if lo <= width <= hi:

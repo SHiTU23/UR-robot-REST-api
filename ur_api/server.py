@@ -30,6 +30,7 @@ app = Flask(__name__)
 
 
 app.before_request(auth.gate)
+app.after_request(auth.allow_any_site)
 app.add_url_rule("/login", "login", auth.login, methods=["POST"])
 app.add_url_rule("/logout", "logout", auth.logout, methods=["POST"])
 
@@ -48,7 +49,7 @@ def _unhandled(e):
     return jsonify({"error": type(e).__name__, "message": str(e)}), 500
 
 
-DRY_RUN_PATHS = {"/control/goto_joints", "/control/plan_cartesian_path", "/control/rotate_tcp"}
+DRY_RUN_PATHS = {"/control/goto_joints", "/control/goto_pose", "/control/plan_cartesian_path", "/control/rotate_tcp"}
 
 
 # Safety gate for every motion endpoint (rules S2 + S4): refuse while the scene is dirty (a commit could not
@@ -120,11 +121,13 @@ def api_help():
         "conventions": {
             "units": "metres, newtons, N*m, radians (unit=deg where offered); positions absolute",
             "frames": f"{C.cell.base_frame} (ROS). The pendant / RTDE 'base' frame is base_link turned 180 deg about "
-                      "z (x and y negated); motion endpoints take frame=base to use it",
+                      "z (x and y negated); motion endpoints take frame=base to use it, or "
+                      "frame=room for the room's axes (robot.room_yaw_deg)",
             "tcp": f"{C.cell.tcp_link}: fingertip centre with the gripper closed, {C.cell.tcp_z:.3f} m along tool0 z, "
                    f"x {C.cell.tcp_xy[0]:+.5f} y {C.cell.tcp_xy[1]:+.5f} m off the flange axis",
             "joints": C.cell.arm_joints,
-            "access": "every endpoint except /, /ui, /login and /control/stop needs 'Authorization: Bearer <token>'",
+            "access": ("every endpoint except /, /ui, /login and /control/stop needs 'Authorization: Bearer <token>'"
+                       if auth.enabled() else "open: no token (UR_API_AUTH=off); anyone who can reach this port can move the arm"),
             "grasp_check": "gripper_grasp returns object_held (true, false, or null without width feedback) and "
                            "outcome object_missed; add require_object=1 to a motion so it refuses unless object_held "
                            "is true (dry runs are not refused)",
@@ -248,6 +251,7 @@ def build():
     state_dir = os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state"))
     os.makedirs(state_dir, exist_ok=True)
     C.home_path = os.path.join(state_dir, "home.json")
+    C.poses_path = os.path.join(state_dir, "poses.json")
     cell.load_saved_home(C.home_path)
     C.store = FileStore(os.environ.get("UR_FILES_ROOT", os.path.join(ROOT, "data")),
                         max_file_bytes=int(os.environ.get("UR_FILES_MAX_BYTES", 100 * 2 ** 20)),

@@ -11,7 +11,7 @@ the URL. Its joint vectors have 6 values instead of 7, and its frames and grippe
 [Differences](#differences-from-the-franka-api)).
 
 ```
-alias api='curl -H "Authorization: Bearer $(./run.sh token)"'   # see Access
+alias api=curl
 api http://localhost:5000/help                                   # every endpoint, generated from the code
 api http://localhost:5000/state                                  # TCP pose, gripper, joints
 api "http://localhost:5000/control/goto_joints?joints=0,-100,100,-90,-90,0&unit=deg&dry_run=1"
@@ -90,6 +90,9 @@ the API's limits all follow it. The tool changer, camera and bracket stay the sa
   closed. The 2F-85's move about 14 mm. The TCP is the closed position, so with open fingers the tips sit
   higher than the TCP. Grasp planning has to allow for that.
 - **Flange + tool changer are 61 mm** (10 + 51) for every gripper (`tool.changer_length_m`).
+- **The RG6 is turned -29.1 deg on the flange** (`mount_yaw_rad`): its fingers open parallel to the camera's long side.
+  The TCP frame is not turned, so it matches the pendant's TCP: to line the fingers up with a direction, turn the TCP
+  29.1 deg from it.
 - **The RG6 TCP is off-axis:** `tcp_xy_m` in `config/grippers/rg6.yaml` holds x -4.07 mm, y -5.19 mm from the TCP
   calibration (pendant TCP `hand_eye_tcp`). Recalibrating means updating it there.
 - **The RG6 model is too long:** 283.2 mm from base to closed fingertips, the real gripper about 261 mm. Its
@@ -121,7 +124,12 @@ Before the first run on the **real arm**:
 
 ## Access
 
-Layers, from the outside in:
+**The API is currently OPEN: no token, and it listens on every network.** Anyone who can reach `http://<pc>:5000` can
+move the arm, including from a browser on the same Wi-Fi. Set up that way on purpose for now (`docker-compose.yml`);
+`/` and `/help` say so too. To connect, use `http://<pc>:5000`. The firewall script below would block this.
+
+To lock it again, set `UR_API_HOST=127.0.0.1` and `UR_API_AUTH=on` in `docker-compose.yml` and restart. The layers are
+then, from the outside in:
 
 1. **Firewall:** `sudo tools/lockdown_firewall.sh` lets only SSH in over Wi-Fi and stops routing from Wi-Fi to the
    robot network. Needed because ROS 2's UDP ports listen on all interfaces. `sudo ufw disable` undoes it.
@@ -143,6 +151,37 @@ emergency stop.
 last grasp was confirmed. `/state` and the panel show `object_held`. It needs the real width (pendant step 2 above);
 without that, `object_held` stays `null` and `require_object=1` refuses. The check runs when the grasp ends, so an
 object dropped later in the move is not noticed.
+
+## Camera resolution
+
+`GET /camera/config` lists the modes. Colour and depth are set separately, and both use the same `fps`:
+```
+/camera/config?width=1280&height=720&fps=30                        # colour
+/camera/config?depth_width=640&depth_height=400                    # depth sensor (depth=auto: the largest)
+/camera/config?align=0                                             # depth images at their own resolution
+```
+With `align=1` (default) depth is resampled onto the colour image, so it comes out at the colour size. A mode the camera
+rejects leaves the previous settings in place. Changes last until the server restarts; to keep them, set `camera.width`,
+`height`, `fps`, `depth_width`, `depth_height` and `align_depth` in `config/cell.yaml`.
+
+## Camera exposure
+
+```
+/camera/exposure                      # read: auto, exposure, gain and their ranges
+/camera/exposure?exposure=200&gain=20 # by hand (turns auto off)
+/camera/exposure?auto=1               # the camera decides
+```
+Colour stream only, in the camera's own units. The panel has the same controls. It lasts until the server restarts; to
+keep it, set `camera.auto_exposure`, `exposure` and `gain` in `config/cell.yaml`.
+
+## RViz view
+
+`robot.room_yaw_deg` in `config/cell.yaml` turns the robot against RViz's grid to match how it stands in the room (+ =
+counter-clockwise from above). Then `./run.sh rviz`.
+
+The same angle gives the room's axes: `frame=room` on `plan_cartesian_path`, `plan_joint_path` and `rotate_tcp`, and the
+panel's jog and rotate buttons (default). `/state` reports the TCP in them under `room`. Coordinates without `frame=room`
+are along the robot's own axes, and saved poses are unaffected. Angle set wrong, `+y` goes the wrong way.
 
 ## Home pose
 
@@ -211,7 +250,7 @@ kept in `state/home.json` and refused if the arm is moving, near a joint limit o
 
 ## Safety
 
-- **Access:** see [Access](#access). A token is required, and the API listens on this PC only by default.
+- **Access:** currently open, with no token; see [Access](#access).
 - **Collision model:** the fixed scene is one floor box (`world_boxes` in `config/cell.yaml`); add walls and a
   ceiling there for this cell. Tool sizes marked `MEASURE` are estimates. The gripper's own links are excluded
   from checks against each other and against the changer, camera and wrist.
