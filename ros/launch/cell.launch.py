@@ -20,12 +20,14 @@ from launch_ros.substitutions import FindPackageShare
 HERE = os.path.dirname(os.path.abspath(__file__))
 CELL = yaml.safe_load(open(os.environ.get("UR_CELL_CONFIG", os.path.join(HERE, "..", "..", "config", "cell.yaml"))))
 GRIPPER = os.environ.get("UR_GRIPPER") or CELL["gripper"]["model"]      # the same choice as the URDF / SRDF
+KINEMATICS = CELL["robot"].get("kinematics_params_file")     # the arm's calibration, if this cell has one
 GM = yaml.safe_load(open(os.path.join(HERE, "..", "..", "config", "grippers", GRIPPER + ".yaml")))
 
 
 def _nodes(context):
     lc = lambda n: LaunchConfiguration(n).perform(context)  # noqa: E731
     mock = lc("use_mock_hardware").lower() == "true"
+    calibration = {"kinematics_params_file": KINEMATICS} if KINEMATICS else {}
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare("ur_robot_driver"), "launch", "ur_control.launch.py"])),
@@ -35,6 +37,7 @@ def _nodes(context):
             "description_launchfile": os.path.join(HERE, "rsp.launch.py"),
             # mock hardware has no speed-scaling interface for the scaled controller
             "initial_joint_controller": "joint_trajectory_controller" if mock else "scaled_joint_trajectory_controller",
+            **calibration,
         }.items())
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(HERE, "moveit.launch.py")),

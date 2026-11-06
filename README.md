@@ -183,6 +183,18 @@ The same angle gives the room's axes: `frame=room` on `plan_cartesian_path`, `pl
 panel's jog and rotate buttons (default). `/state` reports the TCP in them under `room`. Coordinates without `frame=room`
 are along the robot's own axes, and saved poses are unaffected. Angle set wrong, `+y` goes the wrong way.
 
+## Arm calibration
+
+Every UR arm has its own factory calibration. `config/calibration/ur_calibration.yaml` holds this arm's, and the driver and
+model use it (`robot.kinematics_params_file` in `config/cell.yaml`).
+```
+curl http://<pc>:5000/robot/calibration                 # values, hash, whether it is in use and matches the arm
+curl http://<pc>:5000/robot/calibration?format=yaml     # the file itself
+./run.sh save-calibration                               # read it from the arm again, then restart the stack
+```
+`tools/save_calibration.py` does the job of `ur_calibration`'s `calibration_correction`, because the released package (3.9.0)
+never connects. Read it again if the arm or controller is replaced.
+
 ## Home pose
 
 Put the arm where you want it, then press **Save current pose as home** in the panel (or `POST /robot/home`). It is

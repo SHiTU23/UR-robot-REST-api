@@ -9,6 +9,7 @@ import re
 import time
 
 import numpy as np
+import yaml
 from flask import Blueprint, jsonify, request
 
 import geom
@@ -863,6 +864,53 @@ def poses_delete(name):
     del poses[name]
     _write_poses(poses)
     return jsonify({"status": "deleted", "name": name}), 200
+
+
+def _calibration_in_use(kin):
+    """Does the running robot description have these values? Joint origins, since mock hardware leaves out the hash."""
+    import xml.etree.ElementTree as ET
+    joints = {j.get("name"): j for j in ET.fromstring(C.ros.urdf).findall("joint")}
+    pairs = (("shoulder_pan_joint", "shoulder"), ("shoulder_lift_joint", "upper_arm"), ("elbow_joint", "forearm"),
+             ("wrist_1_joint", "wrist_1"), ("wrist_2_joint", "wrist_2"), ("wrist_3_joint", "wrist_3"))
+    for joint, link in pairs:
+        j = joints.get(C.cell.prefix + joint)
+        origin = j.find("origin") if j is not None else None
+        if origin is None:
+            return False
+        have = [float(v) for v in origin.get("xyz", "0 0 0").split()]
+        want = [kin[link][a] for a in "xyz"]
+        if max(abs(x - y) for x, y in zip(have, want)) > 1e-6:
+            return False
+    return True
+
+
+@bp.route("/robot/calibration", methods=["GET"])
+def robot_calibration():
+    """The arm's stored factory calibration. {available, file, hash, kinematics {shoulder.. wrist_3: {x, y, z, roll, pitch,
+    yaw}, hash}, source {serial, model, polyscope, read_at, calibration_status, checksum, dh}, applied (the running robot
+    description uses it), matches_robot (it matches what the controller reports now; null on mock hardware or when the
+    controller cannot be reached)}. format=yaml returns the file itself, ready for kinematics_params_file. 404 when none
+    is stored: tools/save_calibration.py reads it from the arm."""
+    import ur_calibration
+    path = C.cell.calibration_file
+    if not path or not os.path.exists(path):
+        raise err(404, "no_calibration", "no calibration is stored; run tools/save_calibration.py (./run.sh save-calibration)")
+    with open(path) as f:
+        text = f.read()
+    if request.args.get("format") == "yaml":
+        return text, 200, {"Content-Type": "application/yaml; charset=utf-8"}
+    if request.args.get("format") not in (None, "json"):
+        raise err(400, "bad_request", "format must be json or yaml")
+    doc = yaml.safe_load(text)
+    h = doc["kinematics"]["hash"]
+    matches = None
+    if not C.mock:
+        try:
+            matches = ur_calibration.calibration_hash(ur_calibration.read_kinematics(C.cell.robot_ip, timeout_s=3.0)) == h
+        except (OSError, TimeoutError) as e:
+            log.warning("could not read the controller's calibration: %s", e)
+    return jsonify({"available": True, "file": path, "hash": h, "kinematics": doc["kinematics"], "source": doc.get("source"),
+                    "applied": _calibration_in_use(doc["kinematics"]), "matches_robot": matches}), 200
 
 
 def _home_body():

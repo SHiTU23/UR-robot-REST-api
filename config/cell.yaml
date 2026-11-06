@@ -9,6 +9,9 @@ robot:
   ip: 192.168.56.101               # controller IP, read from the arm 2026-11-02 (env UR_ROBOT_IP wins)
   # Home pose: recorded on the real arm right after eye_in_hand_home.urp (~/sota/ui/calibration/home_joints.json)
   home_joints_rad: [3.7456185817718506, -1.4083529573730011, -2.4207828044891357, -3.5637909374632777, -1.7516759077655237, 2.790925979614258]
+  # The arm's factory calibration, passed to the driver as kinematics_params_file (tools/save_calibration.py writes it;
+  # GET /robot/calibration serves it). Belongs to this arm, serial 20195001162: read it again for another controller.
+  kinematics_params_file: /app/config/calibration/ur_calibration.yaml
   # How the base is turned in the room, seen from above (+ = counter-clockwise). Used by RViz's view and by frame=room;
   # base_link coordinates and saved poses do not change. The power cable is about 45 deg off the back of the robot
   # (operator, 2026-11-04).

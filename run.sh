@@ -4,6 +4,7 @@
 # ./run.sh view [rg6|robotiq_2f85]   mock robot with that gripper + RViz  | ./run.sh rviz   RViz on the running stack
 # ./run.sh token     prints the API token (state/api_token)
 # ./run.sh save-start  the real arm's current pose becomes the mock robot's start pose
+# ./run.sh save-calibration  reads the arm's factory calibration into config/calibration/ (restart afterwards)
 # Gripper: gripper.model in config/cell.yaml, or UR_GRIPPER=<model> in front of any command.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -32,7 +33,8 @@ case "${1:-}" in
   logs)  docker compose logs -f --tail 50 ;;
   token) cat state/api_token ;;
   save-start) python3 tools/save_start_pose.py ;;
+  save-calibration) python3 tools/save_calibration.py "${2:-$(cell_ip)}" ;;
   test)  docker run --rm --network host -v "$PWD:/app" -e PYTHONDONTWRITEBYTECODE=1 ur-rest-api:latest python3 /app/tests/api_smoke.py \
            --url "${2:-http://127.0.0.1:5000}" ${3:+--ursim-ip "$3"} ;;
-  *)     sed -n '2,7p' "$0"; exit 1 ;;
+  *)     sed -n '2,8p' "$0"; exit 1 ;;
 esac

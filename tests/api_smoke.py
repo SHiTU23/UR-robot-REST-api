@@ -501,6 +501,20 @@ def room_axes(B):
     check("unknown frame -> 400", s == 400, str(s))
 
 
+def calibration(B):
+    s, r = call(B, "GET", "/robot/calibration")
+    if s == 404:
+        check("no stored calibration -> 404", r["error"] == "no_calibration", str(r.get("error")))
+        return
+    check("GET /robot/calibration", s == 200 and r["available"] and r["hash"].startswith("calib_"), f"{s} {r.get('hash')}")
+    check("the running model uses it", r["applied"] is True, f"applied {r.get('applied')}, matches_robot {r.get('matches_robot')}")
+    check("all six links", all(k in r["kinematics"] for k in ("shoulder", "upper_arm", "forearm", "wrist_1", "wrist_2", "wrist_3")))
+    s, raw = call(B, "GET", "/robot/calibration?format=yaml")
+    check("format=yaml gives the file", s == 200 and raw.startswith(b"kinematics:") and r["hash"].encode() in raw, str(s))
+    s, _ = call(B, "GET", "/robot/calibration?format=xml")
+    check("unknown format -> 400", s == 400, str(s))
+
+
 def access(B):
     if call(B, "GET", "/state", auth=False)[0] == 200:
         check("UR_API_AUTH=off: /help says the API is open", "open" in call(B, "GET", "/help", auth=False)[1]["conventions"]["access"])
@@ -560,7 +574,7 @@ def grasp_check(B):
     call(B, "GET", "/control/gripper_open")
 
 
-GROUPS = {"access": access, "bad_requests": bad_requests, "home": home, "grasp_check": grasp_check, "gripper_buttons": gripper_buttons, "busy_display": busy_display, "named_poses": named_poses, "room_axes": room_axes, "rotate": rotate, "motion": motion,
+GROUPS = {"access": access, "bad_requests": bad_requests, "home": home, "grasp_check": grasp_check, "gripper_buttons": gripper_buttons, "busy_display": busy_display, "named_poses": named_poses, "calibration": calibration, "room_axes": room_axes, "rotate": rotate, "motion": motion,
           "gripper": gripper, "scene": scene, "plan": plan, "misc": misc}
 
 if __name__ == "__main__":
