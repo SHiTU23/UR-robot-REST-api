@@ -12,6 +12,12 @@ robot:
   # The arm's factory calibration, passed to the driver as kinematics_params_file (tools/save_calibration.py writes it;
   # GET /robot/calibration serves it). Belongs to this arm, serial 20195001162: read it again for another controller.
   kinematics_params_file: /app/config/calibration/ur_calibration.yaml
+  # The TCP the tcp link is built with: saved here, set with PUT /robot/tcp or POST /robot/tcp/from_controller, used
+  # after a restart (./run.sh restart). No file: read from the controller once; none either: config/grippers/<model>.yaml.
+  tcp_file: /app/config/calibration/tcp.yaml
+  # file: the saved TCP wins (the controller is only compared). controller: re-read the pendant's active TCP at every
+  # start. Not "controller" with the RG6: its URCap switches the active TCP to its own (234 mm, turned 180 deg).
+  tcp_mode: file
   # How the base is turned in the room, seen from above (+ = counter-clockwise). Used by RViz's view and by frame=room;
   # base_link coordinates and saved poses do not change. The power cable is about 45 deg off the back of the robot
   # (operator, 2026-11-04).
@@ -60,8 +66,29 @@ gripper:
 # Collision geometry fixed in the cell (base_link frame). Each line: name, size [x y z], centre [x y z].
 # MEASURE before trusting it: the sota UI's safe box (2026-09-16, freedrive probe of the TCP) was
 # x -0.70..0.02, y -0.62..0.20, z -0.12..0.35 in the pendant "base" frame = x -0.02..0.70, y -0.20..0.62 here.
-world_boxes:
-  - {name: floor, size: [8.0, 8.0, 0.1], center: [0.0, 0.0, -0.052]}   # the arm stands on the floor; top 2 mm below the base so the base itself does not count as a collision
+world_boxes: []
+  # 2026-11-11: the built-in floor is OFF. It sat 2 mm under the base, 8 x 8 m, and blocked reaching down to a pick
+  # table lower than the robot's own table. Nothing built-in now stops the arm from hitting the table it stands on
+  # or the real floor: the client must send the tables (POST /scene/batch). To bring the floor back:
+  # - {name: floor, size: [8.0, 8.0, 0.1], center: [0.0, 0.0, -0.052]}
+
+# Tables measured by the client's calibration (camera depth), through /cell/surfaces (README, Tables). Each becomes a
+# collision box: top at the measured height, centred on the measured point, footprint size_m [x, y] from here.
+# Heights can change any time: re-calibrate, no restart. Footprints are rough (MEASURE): a box reaching over the other
+# table blocks it only if it is higher than that table (PUT warns). center_xy_m [x, y] (base_link) pins a footprint;
+# without it the box is centred on the measured points.
+surfaces:
+  pick:
+    description: the table next to the robot with the bin of pipes
+    size_m: [0.8, 0.8]
+    thickness_m: 0.05
+    z_range_m: [-1.2, 0.5]           # a measured top outside this is refused as a bad measurement
+  place:
+    description: the table the robot stands on, where the pipes are put down
+    size_m: [1.0, 1.0]
+    thickness_m: 0.05
+    z_range_m: [-0.3, 0.3]
+    allowed_links: [base_link_inertia]   # the robot's base stands on this table: it may touch the box
 
 camera:
   backend: orbbec                  # orbbec | realsense | none (env UR_CAMERA wins)

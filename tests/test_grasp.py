@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ur_api"))
-from gripper import grasp_verdict  # noqa: E402
+from gripper import check_width_feedback, grasp_verdict  # noqa: E402
 
 EMPTY = 0.003
 
@@ -32,6 +32,19 @@ class TestGraspVerdict(unittest.TestCase):
     def test_thin_object_given_explicitly(self):
         self.assertEqual(self.verdict(0.002, 0.002, True, eps_in=0.001, eps_out=0.001), (True, "success"))
 
+
+class TestWidthFeedback(unittest.TestCase):
+    def test_negative_reading_is_rejected(self):
+        # 2026-11-11: the RG6 program reported -15.8 mm after a grasp
+        width, warning = check_width_feedback(-0.0158)
+        self.assertIsNone(width)
+        self.assertIn("-15.8 mm", warning)
+
+    def test_plausible_readings_pass(self):
+        self.assertEqual(check_width_feedback(0.035), (0.035, None))
+        self.assertEqual(check_width_feedback(0.0), (0.0, None))
+        self.assertEqual(check_width_feedback(-0.0003), (0.0, None))   # noise around 0
+        self.assertEqual(check_width_feedback(None), (None, None))
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ The gripper's real width is known only if the programs write it into an output r
 width_measured=false. SimGripper is the same interface without hardware (mock hardware / tests); NoGripper
 answers 501 for a gripper model with no control yet (Robotiq 2F-85 on the real arm).
 """
+import logging
 import os
 import threading
 import time
@@ -23,12 +24,31 @@ import time
 from dashboard import DashboardError
 from rtde_regs import RTDEError
 
+log = logging.getLogger("ur_rest_api")
+
 OUTCOME_STATUS = {"success": 200, "object_missed": 409, "action_timeout": 504, "server_unreachable": 503, "action_failed": 500,
                   "recovery_failed": 500, "stopped": 200, "not_supported": 501}
 
 
 class GripperResult(dict):
     pass
+
+
+WIDTH_FEEDBACK_TOLERANCE_M = 0.0005   # readings down to -0.5 mm count as 0 (noise); below that the reading is wrong
+
+
+def check_width_feedback(measured):
+    """Sanity-check a width read back from the gripper (m): (width or None, warning or None).
+    A negative width is physically impossible, so it is rejected (None: the caller falls back to the commanded
+    width, marked width_measured=false) with a warning saying so."""
+    if measured is None:
+        return None, None
+    if measured < -WIDTH_FEEDBACK_TOLERANCE_M:
+        return None, (f"the gripper reported a width of {measured * 1000:.1f} mm, which is impossible: the reading is "
+                      "ignored and the commanded width shown instead (width_measured=false). Check the fingertip "
+                      "offset in the RG6 settings on the pendant, and that the gripper program writes the measured "
+                      "width to the feedback register after the grip ends")
+    return max(measured, 0.0), None
 
 
 def grasp_verdict(width, target, eps_in, eps_out, min_object_width, width_given):
@@ -260,7 +280,12 @@ class RG6Gripper(_Base):
             if failed is None:
                 failed, outcome = RuntimeError(f"could not give control back to the driver: {msg}"), "action_failed"
         self.phase = "reading the width"
-        measured = self._read_feedback()
+        raw = self._read_feedback()
+        measured, warning = check_width_feedback(raw)
+        if warning:
+            log.warning("%s", warning)
+            out["notes"].append(warning)
+            out.update(width_warning=warning, width_feedback_raw_m=raw)
         self.phase = None
         self.holding = False if outcome == "success" and not closing else None
         if outcome == "success":

@@ -21,15 +21,18 @@
     </link>
   </xacro:macro>
 
-  <xacro:macro name="cell_tool" params="tf_prefix cell gripper grippers_dir">
+  <xacro:macro name="cell_tool" params="tf_prefix cell gripper grippers_dir tcp:=''">
     <xacro:property name="t" value="${cell['tool']}"/>
     <xacro:property name="model" value="${gripper if gripper else cell['gripper']['model']}"/>
     <xacro:property name="gm" value="${xacro.load_yaml(grippers_dir + '/' + model + '.yaml')}"/>
     <xacro:property name="L" value="${t['changer_length_m']}"/>
-    <!-- table rows run open -> closed: the last row is the closed gripper -->
-    <xacro:property name="tcp" value="${L + gm['mount_offset_m'] + gm['table'][-1][2]}"/>
-    <!-- off-axis TCP from a calibration of this gripper on this arm; other gripper models have none -->
-    <xacro:property name="txy" value="${gm.get('tcp_xy_m', [0.0, 0.0])}"/>
+    <!-- the TCP read from the controller (x y z roll pitch yaw), when cell.launch.py passed one -->
+    <xacro:property name="ptcp" value="${[float(v) for v in str(tcp).split()]}"/>
+    <!-- otherwise: table rows run open -> closed, the last row is the closed gripper -->
+    <xacro:property name="tcp_z" value="${ptcp[2] if ptcp else L + gm['mount_offset_m'] + gm['table'][-1][2]}"/>
+    <!-- off-axis TCP (the gripper shifts with it): from the controller, else the model's calibrated value -->
+    <xacro:property name="txy" value="${ptcp[0:2] if ptcp else gm.get('tcp_xy_m', [0.0, 0.0])}"/>
+    <xacro:property name="trpy" value="${ptcp[3:6] if ptcp else [0.0, 0.0, 0.0]}"/>
     <xacro:property name="yaw" value="${(0.0 if gm['closing_axis_in_mount'] == t['finger_axis'] else pi / 2) + gm.get('mount_yaw_rad', 0.0)}"/>
 
     <!-- flange plate + tool changer -->
@@ -64,7 +67,7 @@
     <joint name="${tf_prefix}tool0-tcp" type="fixed">
       <parent link="${tf_prefix}tool0"/>
       <child link="${tf_prefix}tcp"/>
-      <origin xyz="${txy[0]} ${txy[1]} ${tcp}" rpy="0 0 0"/>
+      <origin xyz="${txy[0]} ${txy[1]} ${tcp_z}" rpy="${trpy[0]} ${trpy[1]} ${trpy[2]}"/>
     </joint>
 
     <!-- wrist camera at its hand-eye pose (camera optical frame: x right, y down, z forward) -->

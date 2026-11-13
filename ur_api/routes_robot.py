@@ -297,7 +297,7 @@ def _gripper_body(res, attempts, rec_trig, rec_ok, **extra):
            "error_msg": res.get("error"), "gripper_width_m": res.get("width_m"),
            "width_measured": res.get("width_measured", False), "program": res.get("program"),
            "control_restored": res.get("control_restored"), "elapsed_s": res.get("elapsed_s"),
-           "notes": res.get("notes", [])}
+           "notes": res.get("notes", []), "width_warning": res.get("width_warning")}
     out.update(extra)
     return jsonify(out), OUTCOME_STATUS.get(res["outcome"], 500)
 
@@ -354,7 +354,8 @@ def gripper_grasp():
             res["error"] = error
             log.warning("grasp failed: %s", error)
     elif res["outcome"] == "success":
-        res.setdefault("notes", []).append("no width feedback: the object is NOT confirmed (object_held=null)")
+        why = "the width reading was rejected" if res.get("width_warning") else "no width feedback"
+        res.setdefault("notes", []).append(f"{why}: the object is NOT confirmed (object_held=null)")
     force = min(max(v["force"], C.gripper.min_force), C.gripper.max_force)
     return _gripper_body(res, n, rt, ro, used_width_cmd=v["width"], program_width_cmd=cmd, force=force,
                          object_held=C.gripper.holding)
@@ -363,6 +364,7 @@ def gripper_grasp():
 def _simple_move(width):
     res = C.gripper.move(width, None, closing=width < (C.gripper.state()["width_m"] or C.cell.max_width))
     return jsonify({"result": res["outcome"] == "success", "outcome": res["outcome"], "width_m": res.get("width_m"),
+                    "width_measured": res.get("width_measured", False), "width_warning": res.get("width_warning"),
                     "error": res.get("error")}), 200 if res["outcome"] == "success" else 500
 
 

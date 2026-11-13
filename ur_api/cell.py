@@ -56,6 +56,10 @@ class Cell:
         # TCP = closed fingertip centre: changer + the model's mount offset + closed tip depth (last table row)
         self.tcp_z = float(t["changer_length_m"]) + float(gm["mount_offset_m"]) + float(gm["table"][-1][2])
         self.tcp_xy = [float(v) for v in gm.get("tcp_xy_m", [0.0, 0.0])]   # calibrated offset from the flange axis
+        self.model_tcp_z = self.tcp_z
+        self.tcp_rpy = [0.0, 0.0, 0.0]
+        self.tcp_source = f"config/grippers/{self.gripper_model}.yaml"
+        self.tcp_file = r.get("tcp_file")      # the saved TCP (ur_api/ur_tcp.py, routes_tcp.py)
         # the model's limits; cell.yaml's gripper section (control settings) on top
         self.gripper = {k: gm[k] for k in ("max_width_m", "min_force_n", "max_force_n", "default_force_n")}
         self.gripper.update(g)
@@ -72,6 +76,19 @@ class Cell:
         # wrist_3 (tool roll) cheapest, so it takes the yaw and the big joints stay put.
         self.ik_weights = (2.0, 1.5, 2.0, 1.0, 1.0, 0.15)
         self.ik_limit_margin = 0.05
+
+    def use_urdf_tcp(self, T_tool0_tcp):
+        """Take the TCP from the robot description actually loaded: cell.launch.py may have built it from the
+        saved TCP (robot.tcp_file), which may have changed since (PUT /robot/tcp waits for a restart)."""
+        import ur_tcp
+        self.tcp_xy = [float(T_tool0_tcp[0, 3]), float(T_tool0_tcp[1, 3])]
+        self.tcp_z = float(T_tool0_tcp[2, 3])
+        R = T_tool0_tcp[:3, :3]
+        self.tcp_rpy = [math.atan2(R[2, 1], R[2, 2]), math.asin(max(-1.0, min(1.0, -R[2, 0]))), math.atan2(R[1, 0], R[0, 0])]
+        saved = ur_tcp.load(self.tcp_file, self.gripper_model) if self.tcp_file else None
+        if saved and all(abs(a - b) < 1e-6 for a, b in zip(saved["xyz_m"], self.tcp_xy + [self.tcp_z])):
+            self.tcp_source = f"{self.tcp_file} ({ur_tcp.describe(saved)})"
+        return saved
 
     def load_saved_home(self, path):
         """Use the home pose saved with POST /robot/home, if there is a valid one; otherwise the cell.yaml one."""

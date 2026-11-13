@@ -1,0 +1,21 @@
+# The TCP the robot description is built with (ur_api/ur_tcp.py). Change it with PUT /robot/tcp or
+# POST /robot/tcp/from_controller, then restart the stack (./run.sh restart).
+gripper_model: rg6
+xyz_m:
+- 0.0
+- 0.0
+- 0.322
+rotvec_rad:
+- 0.0
+- 0.0
+- 0.0
+rpy_rad:
+- 0.0
+- 0.0
+- 0.0
+source:
+  set_by: api
+  at: 2026-11-12T16:57:58+0100
+  robot_ip: 192.168.56.101
+  note: pendant hand_eye_TCP (X 0, Y 0, Z 322 mm, no rotation); the controller had
+    the RG6 URCap TCP active

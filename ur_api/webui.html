@@ -163,6 +163,7 @@ async function act(label, path, opts) {
   if (status === 409 && body.activity) log(`${label}: ignored, still busy: ${body.activity.what}`);
   const o = body.outcome || body.status || body.error || "";
   log(`${label}: ${status} ${o} ${body.msg || body.error_msg || (body.outcome ? body.error : "") || ""} ${status >= 400 && body.hint ? body.hint : ""}`);
+  if (body.width_warning) log(`  WARNING: ${body.width_warning}`);
   refresh();
   return body;
 }

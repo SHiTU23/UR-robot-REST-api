@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ./run.sh up [ip]   real arm (UR_ROBOT_IP or cell.yaml robot.ip)  | ./run.sh mock    no robot at all
-# ./run.sh ursim     URSim container (tests/ursim) + the stack      | ./run.sh down | logs | test [url]
+# ./run.sh ursim     URSim container (tests/ursim) + the stack      | ./run.sh restart | down | logs | test [url]
 # ./run.sh view [rg6|robotiq_2f85]   mock robot with that gripper + RViz  | ./run.sh rviz   RViz on the running stack
 # ./run.sh token     prints the API token (state/api_token)
 # ./run.sh save-start  the real arm's current pose becomes the mock robot's start pose
 # ./run.sh save-calibration  reads the arm's factory calibration into config/calibration/ (restart afterwards)
+# ./run.sh save-tcp  saves the controller's active TCP as the TCP (or PUT /robot/tcp); ./run.sh restart to use it
 # Gripper: gripper.model in config/cell.yaml, or UR_GRIPPER=<model> in front of any command.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -29,12 +30,14 @@ case "${1:-}" in
          UR_MOCK=true UR_MOCK_HARDWARE=1 UR_CAMERA=none docker compose up -d --no-build --force-recreate ros api
          allow_x; docker compose --profile rviz up -d --force-recreate rviz ;;
   rviz)  allow_x; docker compose --profile rviz up -d --force-recreate rviz ;;
+  restart) docker compose restart ros api ;;
   down)  docker compose --profile rviz down ;;
   logs)  docker compose logs -f --tail 50 ;;
   token) cat state/api_token ;;
   save-start) python3 tools/save_start_pose.py ;;
   save-calibration) python3 tools/save_calibration.py "${2:-$(cell_ip)}" ;;
+  save-tcp) python3 tools/save_tcp.py "${2:-$(cell_ip)}" ;;
   test)  docker run --rm --network host -v "$PWD:/app" -e PYTHONDONTWRITEBYTECODE=1 ur-rest-api:latest python3 /app/tests/api_smoke.py \
            --url "${2:-http://127.0.0.1:5000}" ${3:+--ursim-ip "$3"} ;;
-  *)     sed -n '2,8p' "$0"; exit 1 ;;
+  *)     sed -n '2,9p' "$0"; exit 1 ;;
 esac

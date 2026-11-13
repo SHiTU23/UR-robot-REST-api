@@ -260,11 +260,54 @@ kept in `state/home.json` and refused if the arm is moving, near a joint limit o
 - **The Franka README's hash snippet** builds `dims` eagerly (`{"box": s["size"], "sphere": [s["radius"]], ...}`),
   which raises `KeyError` for every shape. `tests/test_scene_hash.py` uses the same values evaluated lazily.
 
+## TCP
+
+The `tcp` link (the fingertip centre the API plans to and reports in `/state`) is built at start from the saved TCP in
+`config/calibration/tcp.yaml` (`robot.tcp_file`). The controller's TCP is not used for motion: the API sends joint
+trajectories planned to the `tcp` link.
+
+```bash
+curl localhost:5000/robot/tcp                         # in use, saved, restart_required
+curl "localhost:5000/robot/tcp?controller=1"          # + the controller's active TCP (read-only)
+curl -X PUT -H 'Content-Type: application/json' localhost:5000/robot/tcp \
+     -d '{"xyz_m":[0,0,0.322],"rotvec_rad":[0,0,0],"note":"pendant hand_eye_TCP"}'   # metres; rpy_rad also accepted
+curl -X POST localhost:5000/robot/tcp/from_controller # save the controller's active TCP instead
+./run.sh restart                                      # the new TCP takes effect (restart_required -> false)
+```
+
+- `robot.tcp_mode: file` (default): the saved TCP wins. At start the controller is read only to compare (a NOTE in
+  `./run.sh logs` when it differs), or to create the file if there is none. `controller`: re-read at every start.
+- **Don't use `controller` mode with the RG6.** Its URCap switches the active TCP to its own (234 mm, turned 180°)
+  whenever an RG6 node runs, so the pendant's Installation screen and the active TCP disagree.
+- PUT refuses z outside 0.02–0.8 m (so millimetres are caught) and x, y more than 0.2 m off the flange axis. It warns
+  when z is more than 5 mm off the gripper model's fingertips, or when the TCP is rotated.
+
+## Tables (pick and place heights)
+
+The pick table (bin of pipes, next to the robot) and the place table (the one the robot stands on) are collision
+boxes whose height comes from the client's calibration, so either can change height without a restart. Footprints
+are in `config/cell.yaml`, section `surfaces`.
+
+1. `POST /cell/surfaces/pick/calibrate`: the pick table's box leaves the collision scene, so the calibration poses
+   down at the new height are not blocked. **Until step 2 nothing stops the arm at that table.**
+2. Measure the table top with the camera depth, then `PUT /cell/surfaces/pick` with
+   `{"points": [[x, y, z], ...], "frame_id": "base_link"}` (or `"point": [x, y, z]`; `"frame_id": "base"` for the
+   pendant's frame). The box comes back with its top at the median z, centred on the mean x, y. Heights outside
+   `z_range_m` are refused; points more than 10 mm apart in height, or the arm touching the new box, give warnings.
+3. `POST /cell/surfaces/pick/cancel` instead puts the previous box back.
+
+The same for `place`; the robot's base may touch the place box (`allowed_links`). `GET /cell/surfaces` shows both.
+The boxes live in the scene namespace `cell.surfaces`, persist across restarts and show in RViz. The bin is not a
+surface: send it with `/scene/batch` in the client's own namespace once its position is calibrated.
+
 ## Safety
 
 - **Access:** currently open, with no token; see [Access](#access).
-- **Collision model:** the fixed scene is one floor box (`world_boxes` in `config/cell.yaml`); add walls and a
-  ceiling there for this cell. Tool sizes marked `MEASURE` are estimates. The gripper's own links are excluded
+- **Collision model:** the real cell has NO fixed geometry since 2026-11-11 (`world_boxes: []` in
+  `config/cell.yaml`): the floor box under the base blocked picking from a table lower than the robot's own. The
+  tables are the calibrated surfaces (see [Tables](#tables-pick-and-place-heights)); until both are set, the arm can
+  plan into them. URSim
+  (`tests/ursim/cell_ursim.yaml`) keeps its floor. Tool sizes marked `MEASURE` are estimates. The gripper's own links are excluded
   from checks against each other and against the changer, camera and wrist.
 - **Motion guards:** every motion endpoint keeps the Franka rules:
   - targets and paths stay away from joint limits;

@@ -19,6 +19,7 @@ import urllib.request
 FAILS = []
 GM = {}         # the gripper model the API runs (config/grippers/<model>.yaml), set in __main__
 TCP_Z = None    # expected flange -> TCP, from the repo's config files (not from the API)
+HAS_FLOOR = None   # whether the running cell has the built-in floor box (GET /scene/info builtin_world)
 try:
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "state", "api_token")) as _f:
         TOKEN = os.environ.get("UR_API_TOKEN") or _f.read().strip()
@@ -33,7 +34,8 @@ def load_gripper(base):
     GM.update(yaml.safe_load(open(os.path.join(root, "grippers", model + ".yaml"))))
     GM["model"] = model
     cell = yaml.safe_load(open(os.path.join(root, "cell.yaml")))
-    global TCP_Z
+    global TCP_Z, HAS_FLOOR
+    HAS_FLOOR = "floor" in call(base, "GET", "/scene/info")[1].get("builtin_world", [])
     TCP_Z = cell["tool"]["changer_length_m"] + GM["mount_offset_m"] + GM["table"][-1][2]
 
 
@@ -210,7 +212,7 @@ def scene(B):
     check("scene/objects sync", s == 200 and r["added"] == ["det_1"], f"{s} {r}")
     s, r = call(B, "GET", "/scene/objects?geometry=1")
     ids = [o["id"] for o in r.get("objects", [])]
-    check("scene/objects v2 listing", s == 200 and "box_1" in ids and "pipefit.test1.bin" in ids and "floor" in ids,
+    check("scene/objects v2 listing", s == 200 and "box_1" in ids and "pipefit.test1.bin" in ids and (HAS_FLOOR is False or "floor" in ids),
           f"{ids}")
     mesh_body = {"namespace": "pipefit.test2", "objects": [
         {"id": "pipefit.test2.part", "pose": {"position": [0.3, 0.8, 0.1], "orientation": [0, 0, 0, 1]},
@@ -240,8 +242,9 @@ def scene(B):
         call(B, "DELETE", f"/scene/objects/{n}")
     s, r = call(B, "DELETE", "/scene/models/testbox")
     check("delete model", s == 200, f"{s} {r}")
-    s, r = call(B, "DELETE", "/scene/objects/floor")
-    check("built-in floor protected", s == 409 and r["error"] == "builtin", f"{s} {r.get('error')}")
+    if HAS_FLOOR:
+        s, r = call(B, "DELETE", "/scene/objects/floor")
+        check("built-in floor protected", s == 409 and r["error"] == "builtin", f"{s} {r.get('error')}")
 
 
 def plan(B):
