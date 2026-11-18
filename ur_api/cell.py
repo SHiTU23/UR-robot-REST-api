@@ -7,6 +7,8 @@ import os
 import numpy as np
 import yaml
 
+from gripper_select import selected_gripper
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -24,8 +26,8 @@ class Cell:
         self.arm_joints = [p + n for n in ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                                            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")]
         self.n_joints = len(self.arm_joints)
-        # the gripper model (config/grippers/<model>.yaml), chosen as in the URDF: env UR_GRIPPER, else cell.yaml
-        self.gripper_model = os.environ.get("UR_GRIPPER") or g.get("model", "rg6")
+        # the gripper model (config/grippers/<model>.yaml), chosen as in the URDF (ros/scripts/cell.sh)
+        self.gripper_model, self.gripper_model_source = selected_gripper(g.get("model", "rg6"))
         with open(os.path.join(ROOT, "config", "grippers", self.gripper_model + ".yaml")) as f:
             gm = yaml.safe_load(f)
         self.gripper_spec = gm

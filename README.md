@@ -73,8 +73,15 @@ open http://localhost:5000/ui                                    # browser panel
 
 ## Grippers
 
-One line picks the gripper: `gripper.model` in `config/cell.yaml`, or `UR_GRIPPER=<model>` in front of any
-`run.sh` command. The robot model (URDF), MoveIt's collision exclusions (SRDF), the finger display, the TCP and
+Three ways pick the gripper, the first that is set wins:
+1. `UR_GRIPPER=<model>` in front of any `run.sh` command (the web page then cannot switch it).
+2. **The web page** (`/ui`, Gripper card, *model* + *Switch*), or `POST /gripper/model {"model": "robotiq_2f85"}`:
+   saved in `state/gripper_model`, then the API and the ROS side restart with it (about 30-60 s, the arm does
+   not move; refused with 409 while anything runs). `GET /gripper/models` lists the models and the one in use.
+   The ROS side follows through `ros/scripts/cell.sh`, which exits when the choice changes so Docker restarts it.
+3. `gripper.model` in `config/cell.yaml`.
+
+Switch only when that gripper is really on the flange. The robot model (URDF), MoveIt's collision exclusions (SRDF), the finger display, the TCP and
 the API's limits all follow it. The tool changer, camera and bracket stay the same.
 
 | model | from | on the real arm | width | force | TCP (flange → closed fingertips) |

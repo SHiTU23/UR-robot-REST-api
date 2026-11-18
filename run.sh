@@ -30,7 +30,7 @@ case "${1:-}" in
          UR_MOCK=true UR_MOCK_HARDWARE=1 UR_CAMERA=none docker compose up -d --no-build --force-recreate ros api
          allow_x; docker compose --profile rviz up -d --force-recreate rviz ;;
   rviz)  allow_x; docker compose --profile rviz up -d --force-recreate rviz ;;
-  restart) docker compose restart ros api ;;
+  restart) docker compose restart ros && docker compose restart api ;;   # ros first: an API up before it takes the OLD robot model
   down)  docker compose --profile rviz down ;;
   logs)  docker compose logs -f --tail 50 ;;
   token) cat state/api_token ;;

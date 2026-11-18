@@ -87,6 +87,8 @@
   </section>
   <section>
     <h2 id="g-title">Gripper</h2>
+    <div class="row">model <select id="gmodel" style="width:auto"></select><button id="b-gmodel">Switch</button>
+      <span id="gmodel-note" class="mut"></span></div>
     <div class="row"><button id="b-full">Open</button><button id="b-close">Close</button></div>
     <div class="row">width <input id="gw" type="number" min="0" max="160" step="1" value="80"> mm
       <button id="b-open">Go to width</button></div>
@@ -309,6 +311,47 @@ async function refresh() {
     } else rows($("force"), [["sensor", f.body.msg || "not available"]]);
   } catch (e) { pill("p-mode", "API unreachable", "bad"); }
 }
+// gripper model: the choice restarts the API and the ROS side (robot model, MoveIt, TCP and limits follow it)
+let gmodels = null;
+async function loadModels() {
+  const { status, body } = await api("/gripper/models");
+  if (status !== 200) return;
+  gmodels = body;
+  $("gmodel").innerHTML = body.models.map((m) => `<option value="${m.model}"${m.model === body.current ? " selected" : ""}>${m.name}</option>`).join("");
+  $("gmodel").disabled = $("b-gmodel").disabled = !body.switchable;
+  const cur = body.models.find((m) => m.model === body.current);
+  $("gmodel-note").textContent = body.switchable ? (cur ? cur.control : "") : body.why_not;
+  if (cur) {                 // the inputs follow the gripper's limits
+    $("gw").max = Math.round(cur.max_width_m * 1000);
+    if (+$("gw").value > +$("gw").max) $("gw").value = $("gw").max;
+    $("gf").min = cur.min_force_n; $("gf").max = cur.max_force_n; $("gf").value = cur.default_force_n;
+  }
+}
+async function waitForModel(m) {
+  log("waiting for the API to restart …");
+  const t0 = Date.now();
+  while (Date.now() - t0 < 180000) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const { status, body } = await api("/gripper/models");
+      if (status === 200 && body.current === m) { log(`gripper now: ${body.models.find((x) => x.model === m).name}`); loadModels(); return; }
+    } catch { /* still restarting */ }
+  }
+  log("the API did not come back within 3 min: check ./run.sh logs");
+}
+$("b-gmodel").onclick = async () => {
+  const m = $("gmodel").value;
+  if (!gmodels || m === gmodels.current) { log("gripper: that one is already in use"); return; }
+  const info = gmodels.models.find((x) => x.model === m);
+  if (!confirm(`Switch the gripper to ${info.name}?\n\nThe API and the ROS side restart (about 30-60 s); the arm does not move.\n` +
+               `Only do this when the ${info.name} is really on the flange: the robot model, collision checks, TCP and limits follow this choice.`)) {
+    $("gmodel").value = gmodels.current; return;
+  }
+  const b = await act(`switch gripper to ${info.name}`, "/gripper/model",
+                      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m }) });
+  if (b.status === "restarting") waitForModel(m); else $("gmodel").value = gmodels.current;
+};
+loadModels();
 api("/").then(({ body }) => { if (body.data) $("title").textContent = body.data.split(" (")[0].replace("Hello, this is ", ""); });
 refresh(); setInterval(refresh, 500);
 </script>

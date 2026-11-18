@@ -33,7 +33,8 @@ ACTIVITY = {"/control/gripper_open": "Opening gripper", "/control/gripper_close"
             "/control/gripper_grasp": "Grasping", "/control/gripper_homing": "Opening gripper",
             "/control/plan_cartesian_path": "Moving arm", "/control/plan_joint_path": "Moving arm",
             "/control/goto_joints": "Moving arm", "/control/goto_pose": "Moving to saved pose", "/control/rotate_tcp": "Rotating tool", "/control/home": "Moving home",
-            "/control/nudge_joint": "Moving a joint", "/control/resume": "Resuming the move"}
+            "/control/nudge_joint": "Moving a joint", "/control/resume": "Resuming the move",
+            "/gripper/model": "Switching the gripper model"}
 
 
 def activity():
@@ -1004,6 +1005,66 @@ def health():
         "robot_mode": ROBOT_MODE_NAMES.get(C.motion.robot_mode()),
         "safety_mode": SAFETY_NAMES.get(C.motion.safety_mode()),
     }), 200
+
+
+# ------------------------------------------------------------------ gripper model (web page selector)
+
+def _model_info(model):
+    from gripper_select import ROOT
+    with open(os.path.join(ROOT, "config", "grippers", model + ".yaml")) as f:
+        gm = yaml.safe_load(f)
+    g = C.cell.cfg["gripper"]
+    block = g.get(model) if isinstance(g.get(model), dict) else {}
+    if C.mock:
+        control = "simulated (mock hardware)"
+    elif model == "rg6" or block.get("type") == "pendant":
+        control = f"pendant program {block.get('close_program') or g.get('close_program')}"
+    else:
+        control = "none on the real arm (gripper endpoints answer 501)"
+    return {"model": model, "name": gm["name"], "control": control, "max_width_m": gm["max_width_m"],
+            "min_force_n": gm["min_force_n"], "max_force_n": gm["max_force_n"], "default_force_n": gm["default_force_n"]}
+
+
+@bp.route("/gripper/models", methods=["GET"])
+def gripper_models_get():
+    """The gripper models this cell knows (config/grippers/), the one in use and where that choice comes from
+    (env UR_GRIPPER | web page | cell config), and whether POST /gripper/model may change it."""
+    from gripper_select import gripper_models
+    forced = C.cell.gripper_model_source == "env UR_GRIPPER"
+    return jsonify({"current": C.cell.gripper_model, "source": C.cell.gripper_model_source, "switchable": not forced,
+                    "why_not": "the stack was started with UR_GRIPPER set; restart it without to switch here" if forced else None,
+                    "models": [_model_info(m) for m in gripper_models()]}), 200
+
+
+@bp.route("/gripper/model", methods=["POST"])
+@with_lock
+def gripper_model_set():
+    """Switch the gripper model: body {"model": "rg6" | "robotiq_2f85" | ...}. Saved in state/gripper_model, then the
+    API and the ROS side (robot model, MoveIt, TCP, limits) restart with it: about 30-60 s, during which the API does
+    not answer. Does not move the arm. 409 while anything runs or when env UR_GRIPPER forces the model."""
+    from gripper_select import GRIPPER_SELECTION, gripper_models
+    model = str((request.get_json(silent=True) or {}).get("model") or "")
+    if model not in gripper_models():
+        raise err(400, "unknown_model", f"unknown gripper model {model!r}", hint=f"one of {gripper_models()}")
+    if C.cell.gripper_model_source == "env UR_GRIPPER":
+        raise err(409, "model_forced", f"the stack was started with UR_GRIPPER={C.cell.gripper_model}",
+                   hint="restart it without UR_GRIPPER (./run.sh up) to pick the gripper on the web page")
+    if model == C.cell.gripper_model:
+        return jsonify({"status": "unchanged", "model": model}), 200
+    os.makedirs(os.path.dirname(GRIPPER_SELECTION), exist_ok=True)
+    tmp = GRIPPER_SELECTION + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(model + "\n")
+    os.replace(tmp, GRIPPER_SELECTION)
+    log.warning("gripper model %s -> %s (web page): restarting the API and the ROS side", C.cell.gripper_model, model)
+
+    def _restart():                      # after the answer is out; Docker (restart: unless-stopped) starts it again
+        time.sleep(1.0)
+        os._exit(3)
+    import threading
+    threading.Thread(target=_restart, daemon=True).start()
+    return jsonify({"status": "restarting", "model": model, "from": C.cell.gripper_model,
+                    "msg": f"switching to {_model_info(model)['name']}: the API is back in about 30-60 s"}), 202
 
 
 # ------------------------------------------------------------------ demo box (/simulation/*)
