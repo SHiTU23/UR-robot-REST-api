@@ -13,8 +13,9 @@
 
 The gripper's real width is known only if the programs write it into an output register
 (gripper.width_feedback_register in cell.yaml); otherwise the commanded width is reported, marked
-width_measured=false. SimGripper is the same interface without hardware (mock hardware / tests); NoGripper
-answers 501 for a gripper model with no control yet (Robotiq 2F-85 on the real arm).
+width_measured=false. PendantGripper runs the same sequence for another model (Robotiq 2F-85: gripper.type
+pendant in its cell.yaml block). SimGripper is the same interface without hardware (mock hardware / tests);
+NoGripper answers 501 for a gripper model with no control configured.
 """
 import logging
 import os
@@ -142,7 +143,7 @@ class SimGripper(_Base):
 
 
 class NoGripper(_Base):
-    """A gripper model without control on the real arm yet (Robotiq 2F-85): every action answers 501, so a
+    """A gripper model without control configured (no gripper.type pendant for it): every action answers 501, so a
     client never takes a grasp for done. The model still shows the fingers open."""
     backend = "none"
 
@@ -262,8 +263,10 @@ class RG6Gripper(_Base):
                 if time.time() > deadline:
                     self.dash.stop()
                     outcome = "action_timeout"
-                    failed = RuntimeError(f"{program} did not finish within {timeout_s:.0f} s (started={started}); "
-                                          "does it exist on the pendant?")
+                    failed = RuntimeError(
+                        f"{program} was still running after {timeout_s:.0f} s and was stopped: untick 'Program Loops "
+                        "Forever' in its Robot Program node on the pendant (and no Wait / Loop at its end)" if started
+                        else f"{program} did not start within {timeout_s:.0f} s; does it exist on the pendant?")
                     break
                 time.sleep(0.05)
         except (DashboardError, RTDEError, RuntimeError, OSError) as e:
@@ -297,9 +300,18 @@ class RG6Gripper(_Base):
         return out
 
 
+class PendantGripper(RG6Gripper):
+    """Any other gripper driven by the same sequence (registers -> pendant program -> driver back), e.g. the
+    Robotiq 2F-85 through its URCap. Width and force go in as mm and N like the RG6; a program that needs other
+    units (Robotiq: force in %) converts them on the pendant."""
+    backend = "pendant"
+
+
 def make_gripper(cell, ros, dashboard, mock):
     if mock or cell.gripper.get("type") == "sim":
         return SimGripper(cell, ros)
     if cell.gripper_model == "rg6":
         return RG6Gripper(cell, ros, dashboard)
+    if cell.gripper.get("type") == "pendant":          # e.g. robotiq_2f85 with its block in cell.yaml
+        return PendantGripper(cell, ros, dashboard)
     return NoGripper(cell, ros)

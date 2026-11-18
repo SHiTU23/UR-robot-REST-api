@@ -1,5 +1,5 @@
 # Robotiq 2F-85 on Robotiq's UR adapter plate (ros/urdf/grippers/robotiq_2f85.xacro): links, driving joint,
-# limits, and the width table. Control on the real arm is not implemented yet (mock / simulated gripper only).
+# limits, and the width table. On the real arm it is driven by a pendant program (config/cell.yaml gripper.robotiq_2f85).
 xacro: robotiq_2f85.xacro
 name: Robotiq 2F-85
 joint: robotiq_85_left_knuckle_joint    # 0 = open .. 0.8 = closed; every other finger joint mimics it
@@ -9,7 +9,15 @@ links: [ur_to_robotiq_link, robotiq_85_base_link, robotiq_85_left_knuckle_link, 
         robotiq_85_right_inner_knuckle_link, robotiq_85_left_finger_tip_link, robotiq_85_right_finger_tip_link]
 pad_links: [robotiq_85_left_finger_tip_link, robotiq_85_right_finger_tip_link]
 closing_axis_in_mount: x
-mount_offset_m: 0.0                     # the adapter plate's flange side (the table's tip depth includes its 11 mm)
+# The model put the closed fingertips at 0.2348 m from the flange (61 mm changer + 173.8 mm model), the pendant TCP calibrated
+# for this gripper (2026-11-16) at 0.192 m: the model was 42.8 mm too long and every grasp near the bin floor "collided" with it.
+# This shift puts the model's closed fingertips at the calibrated TCP (as the RG6's -0.0222). The adapter plate's flange side.
+mount_offset_m: -0.0428
+# How far the gripper is turned on the flange, about tool0 z: its fingers close along this direction. 2026-11-16, derived (not
+# measured with a tool): an open fingertip in the wrist camera back-projects to 81.5 deg from tool0 x, and the operator saw the
+# fingers 36 deg from the camera image's short axis (45 deg in tool0) -> 81 deg. NOT the pendant TCP's +36 deg (picks with the
+# fingers assumed along TCP x came out turned). pipeFit's ur_pick has the same as closing_in_tcp_deg 45 (= 81 - 36).
+mount_yaw_rad: 1.413717
 max_width_m: 0.085                      # datasheet stroke 85 mm (the model: 85.0 mm, see the table)
 min_force_n: 20.0                       # datasheet grip force 20-235 N
 max_force_n: 235.0

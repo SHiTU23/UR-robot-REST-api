@@ -22,7 +22,7 @@ CELL = yaml.safe_load(open(os.environ.get("UR_CELL_CONFIG", os.path.join(HERE, "
 GRIPPER = os.environ.get("UR_GRIPPER") or CELL["gripper"]["model"]      # the same choice as the URDF / SRDF
 KINEMATICS = CELL["robot"].get("kinematics_params_file")     # the arm's calibration, if this cell has one
 GM = yaml.safe_load(open(os.path.join(HERE, "..", "..", "config", "grippers", GRIPPER + ".yaml")))
-TCP_FILE = CELL["robot"].get("tcp_file")       # the TCP the tcp link is built with (ur_api/ur_tcp.py)
+TCP_FILE = (CELL["robot"].get("tcp_file") or "").replace("{model}", GRIPPER) or None   # this gripper's saved TCP (ur_tcp.py)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ur_api"))
 import ur_tcp  # noqa: E402
 

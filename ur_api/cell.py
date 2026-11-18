@@ -61,10 +61,12 @@ class Cell:
         self.model_tcp_z = self.tcp_z
         self.tcp_rpy = [0.0, 0.0, 0.0]
         self.tcp_source = f"config/grippers/{self.gripper_model}.yaml"
-        self.tcp_file = r.get("tcp_file")      # the saved TCP (ur_api/ur_tcp.py, routes_tcp.py)
+        self.tcp_file = (r.get("tcp_file") or "").replace("{model}", self.gripper_model) or None   # per gripper (ur_tcp.py)
         # the model's limits; cell.yaml's gripper section (control settings) on top
         self.gripper = {k: gm[k] for k in ("max_width_m", "min_force_n", "max_force_n", "default_force_n")}
-        self.gripper.update(g)
+        # blocks named after a model (gripper.robotiq_2f85: {...}) override the shared lines for that model only
+        self.gripper.update({k: v for k, v in g.items() if not isinstance(v, dict)})
+        self.gripper.update(g.get(self.gripper_model) or {})
         self.gripper["model"] = self.gripper_model
         self.gripper["name"] = gm["name"]
         self.max_width = float(self.gripper["max_width_m"])

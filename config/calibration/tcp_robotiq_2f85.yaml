@@ -1,0 +1,20 @@
+# The TCP the robot description is built with (ur_api/ur_tcp.py). Change it with PUT /robot/tcp or
+# POST /robot/tcp/from_controller, then restart the stack (./run.sh restart).
+gripper_model: robotiq_2f85
+xyz_m:
+- 0.0
+- 0.0
+- 0.192
+rotvec_rad:
+- 0.0
+- 0.0
+- 0.628319
+rpy_rad:
+- 0.0
+- -0.0
+- 0.628319
+source:
+  set_by: controller
+  at: 2026-11-16T13:14:57+0000
+  robot_ip: 192.168.56.101
+  note: 'the controller''s active TCP (pendant: Installation > General > TCP)'

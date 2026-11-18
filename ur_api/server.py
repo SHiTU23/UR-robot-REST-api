@@ -168,6 +168,8 @@ def _gripper_note(cell, gripper):
     g = cell.gripper
     how = {"rg6": "via pendant programs (RTDE registers + dashboard); the driver regains control after every "
                   "gripper action",
+           "pendant": "via its pendant program (RTDE registers + dashboard, like the RG6); the driver regains "
+                      "control after every gripper action",
            "sim": "SIMULATED (mock hardware, or no control for this gripper yet): the fingers only move in the model",
            "none": "NOT CONTROLLABLE on this arm yet: gripper endpoints answer 501"}.get(gripper.backend, gripper.backend)
     return (f"{g['name']} ({cell.gripper_model}), {how}; 0..{g['max_width_m']:.3f} m, "

@@ -14,7 +14,8 @@ robot:
   kinematics_params_file: /app/config/calibration/ur_calibration.yaml
   # The TCP the tcp link is built with: saved here, set with PUT /robot/tcp or POST /robot/tcp/from_controller, used
   # after a restart (./run.sh restart). No file: read from the controller once; none either: config/grippers/<model>.yaml.
-  tcp_file: /app/config/calibration/tcp.yaml
+  # One file per gripper ({model} = rg6 | robotiq_2f85): switching grippers never overwrites the other one's TCP.
+  tcp_file: /app/config/calibration/tcp_{model}.yaml
   # file: the saved TCP wins (the controller is only compared). controller: re-read the pendant's active TCP at every
   # start. Not "controller" with the RG6: its URCap switches the active TCP to its own (234 mm, turned 180 deg).
   tcp_mode: file
@@ -50,7 +51,7 @@ tool:
 gripper:
   # Which gripper is on the flange (its model: config/grippers/<model>.yaml). Env UR_GRIPPER wins.
   #   rg6           OnRobot RG6, driven by the pendant programs below
-  #   robotiq_2f85  Robotiq 2F-85 (model only for now: simulated gripper, no control on the real arm yet)
+  #   robotiq_2f85  Robotiq 2F-85, driven the same way by its own pendant program (block robotiq_2f85: below)
   model: rg6
   type: rg6                        # control backend: rg6 | sim
   open_program: gripper_close_adaptive.urp   # one script for both: it goes to the width in register 18 (2026-11-02)
@@ -62,6 +63,14 @@ gripper:
   min_object_width_m: 0.003        # a grasp with no expected width that ends at or below this met nothing: object_missed
   open_threshold_m: 0.03           # /state "gripper": 1 (open) above this width
   close_squeeze_m: 0.010           # a grasp closes this far past (width - eps_in), so the force limit ends it (sota UI value)
+
+  # Per-model overrides: used ONLY when that model is selected (model: above, or env UR_GRIPPER); every line not
+  # listed here comes from the lines above. The RG6 uses the lines above as they are.
+  robotiq_2f85:
+    type: pendant                  # pendant program like the RG6; comment out -> gripper endpoints answer 501
+    open_program: uw_wara.urp        # one program for both, on the pendant (2026-11-16): width mm from register 18,
+    close_program: uw_wara.urp       # force N from register 19 (converted to % on the pendant), writes rq_current_pos_mm()
+    width_feedback_register: 18      # to output register 18; -1 = the program writes no width back
 
 # Collision geometry fixed in the cell (base_link frame). Each line: name, size [x y z], centre [x y z].
 # MEASURE before trusting it: the sota UI's safe box (2026-09-16, freedrive probe of the TCP) was

@@ -87,7 +87,7 @@ the API's limits all follow it. The tool changer, camera and bracket stay the sa
 | model | from | on the real arm | width | force | TCP (flange → closed fingertips) |
 |---|---|---|---|---|---|
 | `rg6` | MIT meshes from [BrettRD/onrobot_grippers](https://github.com/BrettRD/onrobot_grippers) | pendant programs (below) | 0–160 mm | 25–120 N | 0.322 m, **measured** |
-| `robotiq_2f85` | official `ros-jazzy-robotiq-description`, on Robotiq's UR adapter | **not yet**: gripper endpoints answer 501 (mock: simulated) | 0–85 mm | 20–235 N | 0.235 m, **derived** (same flange + changer, adapter + model) |
+| `robotiq_2f85` | official `ros-jazzy-robotiq-description`, on Robotiq's UR adapter | pendant program `uw_wara.urp` (below), **not yet tried on the arm** | 0–85 mm | 20–235 N | 0.235 m, **derived** (same flange + changer, adapter + model) |
 
 - Both grippers close their fingers on a linkage, so the finger joint is an angle, not half the width.
   `config/grippers/<model>.yaml` holds the table between joint angle, width and fingertip depth. It is
@@ -120,6 +120,19 @@ Before the first run on the **real arm**:
    know the real finger width, add `write_output_float_register(N, <the URCap's width variable>)` at the end of
    the program and set `gripper.width_feedback_register: N`. Without that, the API reports the commanded
    width with `width_measured: false`, and a grasp counts as successful once the program finishes.
+   **Robotiq 2F-85 instead:** start with `UR_GRIPPER=robotiq_2f85` (or `gripper.model: robotiq_2f85`). Its block
+   `gripper.robotiq_2f85` in `config/cell.yaml` replaces only the program names; the RG6 settings stay untouched.
+   On the pendant (Robotiq URCap installed, gripper set up in the Installation tab) make `uw_wara.urp` with
+   one Script node (check the exact `rq_*` names in the Script node's function list for your URCap version):
+   ```
+   rq_activate_and_wait()
+   rq_set_force_norm((read_input_float_register(19) - 20) / 215 * 100)   # N -> % (2F-85: 20-235 N)
+   rq_set_speed_norm(50)
+   rq_move_and_wait_mm(read_input_float_register(18))                   # mm; needs the URCap's mm calibration
+   write_output_float_register(18, rq_current_pos_mm())
+   ```
+   The first activation sweeps the fingers fully. The TCP (0.235 m) is derived from the model, not measured:
+   measure it and set it (pendant + `/robot/tcp`) before grasping; set the payload on the pendant too.
 3. **Network:** the robot must reach this PC, because the driver uses reverse connections on ports
    50001–50004. Set `robot.ip` in `config/cell.yaml`, or pass `UR_ROBOT_IP`.
 4. **Measure the `MEASURE` values in `config/cell.yaml`:** the tool changer, camera bracket, and **the table
@@ -270,7 +283,7 @@ kept in `state/home.json` and refused if the arm is moving, near a joint limit o
 ## TCP
 
 The `tcp` link (the fingertip centre the API plans to and reports in `/state`) is built at start from the saved TCP in
-`config/calibration/tcp.yaml` (`robot.tcp_file`). The controller's TCP is not used for motion: the API sends joint
+`config/calibration/tcp_<gripper model>.yaml` (`robot.tcp_file`, one per gripper). The controller's TCP is not used for motion: the API sends joint
 trajectories planned to the `tcp` link.
 
 ```bash
