@@ -132,6 +132,24 @@ def parse_max_travel():
     return math.radians(deg)
 
 
+SPEED_RANGE = (0.01, 0.5)
+
+
+def parse_speed(vel_default, acc_default=None, get=None):
+    """(2026-11-19) velocity= and acceleration= of every motion endpoint: MoveIt's scaling factors (0.01..0.5 of the
+    joint speed and acceleration limits). acc_default None: the acceleration follows the velocity (what the
+    Cartesian moves always did). Short moves are acceleration-limited, so velocity alone hardly changes them."""
+    get = get or request.args.get
+    lo, hi = SPEED_RANGE
+    vel = float(get("velocity", vel_default))
+    raw = get("acceleration", None)
+    acc = float(raw) if raw is not None else (vel if acc_default is None else float(acc_default))
+    for k, v in (("velocity", vel), ("acceleration", acc)):
+        if not (math.isfinite(v) and lo <= v <= hi):
+            raise ValueError(f"{k} must be in {lo}..{hi}")
+    return vel, acc
+
+
 def tcp_pose(q):
     return geom.T_to_pose(C.kin.fk(q))
 
@@ -451,16 +469,18 @@ def _rotate_waypoints(start, end, deg):
     return out
 
 
-def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None):
-    """A straight-line move to m's target, or through ``waypoints``. dry_run only plans and shows it in RViz."""
+def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None, acceleration=None):
+    """A straight-line move to m's target, or through ``waypoints``. dry_run only plans and shows it in RViz.
+    acceleration None: the velocity's value."""
     rej = preflight()
     if rej:
         return rej
     pose = target_pose(m)
     fraction = {"v": None}
+    acceleration = velocity if acceleration is None else acceleration
 
     def plan_fn():
-        traj, frac, code = C.motion.plan_cartesian(waypoints or [pose], vel=velocity, acc=velocity)
+        traj, frac, code = C.motion.plan_cartesian(waypoints or [pose], vel=velocity, acc=acceleration)
         fraction["v"] = frac
         return traj, frac >= 0.999 and code == 1, {"fraction": frac}
 
@@ -472,14 +492,14 @@ def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None):
         travel, far = C.motion.too_far(traj, limit) if ok else ({}, [])
         pts = traj.joint_trajectory.points if ok else []
         return jsonify({"outcome": "planned" if ok else "plan_failed", "dry_run": True, "fraction": fraction["v"],
-                        "target_pose": pose, "waypoints": len(pts),
+                        "target_pose": pose, "waypoints": len(pts), "velocity": velocity, "acceleration": acceleration,
                         "duration_s": (pts[-1].time_from_start.sec + pts[-1].time_from_start.nanosec * 1e-9) if pts else 0.0,
                         "joint_travel_deg": {k: round(math.degrees(v), 1) for k, v in travel.items()},
                         "would_be_rejected_as_too_large": far,
                         "tcp_drift_from_start_mm": round(_tcp_drift_mm(traj, tcp_pose(C.motion.current_q())["position"]), 3) if ok else None}), 200
 
     out = C.motion.plan_and_execute(plan_fn, m["auto_recover"], m["max_retries"], max_travel)
-    extra = {"fraction": str(fraction["v"]), "target_pose": pose}
+    extra = {"fraction": str(fraction["v"]), "target_pose": pose, "velocity": velocity, "acceleration": acceleration}
     if out["outcome"] == "plan_failed":
         extra["moveit_error"] = (f"PARTIAL_PATH (fraction={fraction['v']}, likely unreachable target, a collision on "
                                  "the line, or a joint limit)")
@@ -491,21 +511,19 @@ def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None):
 def plan_cartesian_path():
     """Straight-line (MoveL) TCP move to ABSOLUTE x,y,z (metres; frame=base_link default, frame=base for the
     pendant frame, or frame=room for the room's axes). Orientation: roll&pitch&yaw (degrees, sxyz; straight down = 180,0,0) or qx&qy&qz&qw;
-    else preserve_orientation=1 keeps the current one, 0 resets to straight down. velocity=0.05 (scaling),
-    auto_recover=1, max_retries=1, max_joint_travel_deg=100 (big-swing guard, wrist_3 exempt; 0 disables).
-    dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
+    else preserve_orientation=1 keeps the current one, 0 resets to straight down. velocity=0.05, acceleration=<the
+    velocity> (0.01..0.5 scalings), auto_recover=1, max_retries=1, max_joint_travel_deg=100 (big-swing guard, wrist_3
+    exempt; 0 disables). dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
     try:
         m = parse_motion_args()
         mt = parse_max_travel()
-        vel = float(request.args.get("velocity", "0.05"))
-        if not 0.01 <= vel <= 0.5:
-            raise ValueError("velocity must be in 0.01..0.5")
+        vel, acc = parse_speed("0.05")
     except (TypeError, ValueError) as e:
         return jsonify({"error": "bad motion args", "msg": str(e)}), 400
     dry = _flag(request.args.get("dry_run", "0"), False)
     if not dry:
-        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel)
-    return do_cartesian(m, mt, vel, dry)
+        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel, acceleration=acc)
+    return do_cartesian(m, mt, vel, dry, acceleration=acc)
 
 
 @bp.route("/control/rotate_tcp", methods=["GET"])
@@ -513,7 +531,7 @@ def plan_cartesian_path():
 def rotate_tcp():
     """Turn the TCP about one of its axes while its position stays put: axis=x|y|z, deg=<signed, up to 45> (from the
     current orientation), frame=base_link (default, axes of the robot base) | base (pendant frame) | room (robot.room_yaw_deg) | tool (the TCP's own
-    axes, which turn with it). velocity=0.05, auto_recover=1, max_retries=1, max_joint_travel_deg=100; dry_run=1 plans
+    axes, which turn with it). velocity=0.05, acceleration=<the velocity>, auto_recover=1, max_retries=1, max_joint_travel_deg=100; dry_run=1 plans
     only, shows the plan in RViz and reports tcp_drift_from_start_mm. WARNING: moves the arm (unless dry_run=1)."""
     try:
         axis = request.args.get("axis", "").lower()
@@ -525,9 +543,7 @@ def rotate_tcp():
         frame = request.args.get("frame", C.cell.base_frame)
         if frame not in (C.cell.base_frame, "base", "room", "tool"):
             raise ValueError(f"frame must be {C.cell.base_frame}, base, room or tool")
-        vel = float(request.args.get("velocity", "0.05"))
-        if not 0.01 <= vel <= 0.5:
-            raise ValueError("velocity must be in 0.01..0.5")
+        vel, acc = parse_speed("0.05")
         mt = parse_max_travel()
         retries = int(request.args.get("max_retries", "1"))
     except (TypeError, ValueError) as e:
@@ -549,11 +565,11 @@ def rotate_tcp():
     dry = _flag(request.args.get("dry_run", "0"), False)
     if not dry:
         # /control/resume replans a straight line to the same pose
-        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel)
-    return do_cartesian(m, mt, vel, dry, wps)
+        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel, acceleration=acc)
+    return do_cartesian(m, mt, vel, dry, wps, acceleration=acc)
 
 
-def do_joint_path(m, planner_id, max_travel):
+def do_joint_path(m, planner_id, max_travel, velocity=0.3, acceleration=0.05):
     rej = preflight()
     if rej:
         return rej
@@ -561,12 +577,13 @@ def do_joint_path(m, planner_id, max_travel):
 
     def plan_fn():
         ok, traj, t, code, meta = C.motion.plan_pose(pose, planner_id, m["preserve_orientation"]
-                                                     and m["orientation"] is None)
+                                                     and m["orientation"] is None, vel=velocity, acc=acceleration)
         return traj, ok, {"planning_time": t, "error_code": code, "planner_id": planner_id, **meta}
 
     out = C.motion.plan_and_execute(plan_fn, m["auto_recover"], m["max_retries"], max_travel)
     meta = out.get("plan_metadata") or {}
-    extra = {"planning_time": str(meta.get("planning_time")), "planner_id": planner_id, "target_pose": pose}
+    extra = {"planning_time": str(meta.get("planning_time")), "planner_id": planner_id, "target_pose": pose,
+             "velocity": velocity, "acceleration": acceleration}
     if out["outcome"] == "plan_failed":
         extra["moveit_error"] = decode_error(meta.get("error_code"))
     return motion_response(out, extra)
@@ -578,7 +595,7 @@ def plan_joint_path():
     """Joint-space plan + execute of the TCP to x,y,z (same params as plan_cartesian_path) with planner_id=LIN
     (Pilz straight line, default) or RRTConnect (the target is first solved by IK for the configuration
     nearest the current joints, so the arm keeps its configuration; the least-travel of 3 plans runs).
-    WARNING: moves the arm."""
+    velocity=0.3, acceleration=0.05 (0.01..0.5 scalings). WARNING: moves the arm."""
     try:
         m = parse_motion_args()
         pid = request.args.get("planner_id", "LIN")
@@ -587,10 +604,11 @@ def plan_joint_path():
         if pid not in ("LIN", "RRTConnect"):
             raise ValueError("planner_id must be LIN or RRTConnect")
         mt = parse_max_travel()
+        vel, acc = parse_speed("0.3", "0.05")
     except (TypeError, ValueError) as e:
         return jsonify({"error": "bad motion args", "msg": str(e)}), 400
-    _remember(kind="joint", m=m, planner_id=pid, max_travel=mt)
-    return do_joint_path(m, pid, mt)
+    _remember(kind="joint", m=m, planner_id=pid, max_travel=mt, velocity=vel, acceleration=acc)
+    return do_joint_path(m, pid, mt, vel, acc)
 
 
 def parse_goto(current):
@@ -618,12 +636,7 @@ def parse_goto(current):
         raise ValueError(f"give joints=<{n} values> and/or j1..j{n}=<value>")
     if not all(math.isfinite(v) for v in target):
         raise ValueError("joint values must be finite")
-    velocity = float(get("velocity", "0.2"))
-    if not 0.01 <= velocity <= 0.5:
-        raise ValueError("velocity must be in 0.01..0.5")
-    acceleration = float(get("acceleration", "0.1"))    # (2026-11-19) was always 0.1: short moves are acceleration-limited, so velocity alone hardly changed them
-    if not 0.01 <= acceleration <= 0.5:
-        raise ValueError("acceleration must be in 0.01..0.5")
+    velocity, acceleration = parse_speed("0.2", "0.1", get)    # (2026-11-19) acceleration was always 0.1
     mjt = get("max_joint_travel_deg")
     mt = None if mjt is None else math.radians(float(mjt))
     if mt is not None and mt < 0:
@@ -652,7 +665,7 @@ def do_goto(g):
             return rej
 
     def plan_fn():
-        ok, traj, t, code, planner = C.motion.plan_joint_goal(target, vel=g["velocity"], acc=g.get("acceleration", 0.1))
+        ok, traj, t, code, planner = C.motion.plan_joint_goal(target, vel=g["velocity"], acc=g["acceleration"])
         return traj, ok, {"planning_time": t, "error_code": code, "planner_used": planner}
 
     if g["dry_run"]:
@@ -668,14 +681,14 @@ def do_goto(g):
                 "joint_travel_deg": {j: round(math.degrees(t), 1) for j, t in travel.items()},
                 "would_be_rejected_as_too_large": [j for j, t in travel.items() if limit and t > limit
                                                    and j not in C.cell.travel_exempt],
-                "target_rad": target}
+                "target_rad": target, "velocity": g["velocity"], "acceleration": g["acceleration"]}
         if not ok:
             body["moveit_error"] = decode_error(meta["error_code"])
         return jsonify(body), 200 if ok else 202
     out = C.motion.plan_and_execute(plan_fn, g["auto_recover"], g["max_retries"], g["max_travel"])
     meta = out.get("plan_metadata") or {}
     extra = {"planner_used": meta.get("planner_used"), "planning_time": str(meta.get("planning_time")),
-             "target_rad": target}
+             "target_rad": target, "velocity": g["velocity"], "acceleration": g["acceleration"]}
     if out["outcome"] == "plan_failed":
         extra["moveit_error"] = decode_error(meta.get("error_code"))
     return motion_response(out, extra)
@@ -712,17 +725,15 @@ def goto_joints():
 @bp.route("/control/goto_pose", methods=["GET"])
 @with_lock
 def goto_pose():
-    """Move to a pose saved with POST /robot/poses: name=<name>, velocity=0.2 (0.01..0.5), max_joint_travel_deg=100
-    (big-swing guard; 0 disables), auto_recover=1, max_retries=1. Same planner and checks as /control/goto_joints.
-    dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
+    """Move to a pose saved with POST /robot/poses: name=<name>, velocity=0.2, acceleration=0.1 (0.01..0.5),
+    max_joint_travel_deg=100 (big-swing guard; 0 disables), auto_recover=1, max_retries=1. Same planner and checks as
+    /control/goto_joints. dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
     pose = _load_poses().get(request.args.get("name", ""))
     if pose is None:
         raise err(404, "unknown_pose", f"no saved pose named {request.args.get('name', '')!r}; GET /robot/poses lists them")
     try:
-        velocity = float(request.args.get("velocity", "0.2"))
-        if not 0.01 <= velocity <= 0.5:
-            raise ValueError("velocity must be in 0.01..0.5")
-        g = {"target": [float(v) for v in pose["joints_rad"]], "unit": "rad", "velocity": velocity,
+        velocity, acceleration = parse_speed("0.2", "0.1")
+        g = {"target": [float(v) for v in pose["joints_rad"]], "unit": "rad", "velocity": velocity, "acceleration": acceleration,
              "max_travel": parse_max_travel(), "auto_recover": _flag(request.args.get("auto_recover")),
              "max_retries": int(request.args.get("max_retries", "1")),
              "dry_run": _flag(request.args.get("dry_run", "0"), False)}
@@ -747,9 +758,9 @@ def resume():
     if not ok:
         return jsonify({"error": "recovery_failed", "msg": why}), 409
     if lm["kind"] == "cartesian":
-        return do_cartesian(lm["m"], lm["max_travel"], lm["velocity"])
+        return do_cartesian(lm["m"], lm["max_travel"], lm["velocity"], acceleration=lm.get("acceleration"))
     if lm["kind"] == "joint":
-        return do_joint_path(lm["m"], lm["planner_id"], lm["max_travel"])
+        return do_joint_path(lm["m"], lm["planner_id"], lm["max_travel"], lm.get("velocity", 0.3), lm.get("acceleration", 0.05))
     return do_goto(dict(lm["g"], dry_run=False))
 
 
@@ -777,11 +788,17 @@ def nudge_joint():
 @with_lock
 def home():
     """Joint move to the cell's home pose (cell.yaml robot.home_joints_rad: the recorded eye-in-hand home).
-    PTP, RRTConnect as fallback, velocity scaling 0.3. Not subject to the big-swing guard. WARNING: moves the arm."""
+    PTP, RRTConnect as fallback, velocity=0.3, acceleration=0.1 (0.01..0.5 scalings). Not subject to the big-swing
+    guard. WARNING: moves the arm."""
+    try:
+        vel, acc = parse_speed("0.3", "0.1")
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": "bad home args", "msg": str(e)}), 400
     C.motion.clear_stop()
-    r = C.motion.move_joints(C.cell.home_q, vel=0.3, acc=0.1)
+    r = C.motion.move_joints(C.cell.home_q, vel=vel, acc=acc)
     if r["executed"]:
         return jsonify({"status": "homed", "msg": "arm moved to the home joint pose", "planner_used": r["planner_used"],
+                        "velocity": vel, "acceleration": acc,
                         "planning_time": str(r["planning_time"]), "home_rad": C.cell.home_q}), 200
     return jsonify({"status": "failed", "msg": "home motion failed", "planner_tried": ["PTP", "RRTConnect"],
                     "plan_error_codes": r.get("plan_error_codes"), "last_error": last_error()}), 500

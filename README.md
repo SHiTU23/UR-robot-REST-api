@@ -138,8 +138,7 @@ Before the first run on the **real arm**:
    end
    ```
    With the two register-19 parts in the program, uncomment `object_feedback_register: 19` in the Robotiq block: every gripper
-   reply then has `object_detected` true / false (null without it, and always for the RG6). `/control/goto_joints` takes
-   `acceleration` (0.01–0.5, default 0.1) next to `velocity`.
+   reply then has `object_detected` true / false (null without it, and always for the RG6).
    The first activation sweeps the fingers fully. The TCP (0.235 m) is derived from the model, not measured:
    measure it and set it (pendant + `/robot/tcp`) before grasping; set the payload on the pendant too.
 3. **Network:** the robot must reach this PC, because the driver uses reverse connections on ports
@@ -246,8 +245,23 @@ kept in `state/home.json` and refused if the arm is moving, near a joint limit o
 | `stopped_user_button` | user-stop button | UR **emergency or safeguard stop** |
 | `/recover` | Franka error recovery | unlocks a protective stop (refused by the controller in its first 5 s), closes popups, resends the driver's program. It does **not** power on or release the brakes: a powered-off arm is reported, not restarted |
 | `/control/home` | fixed Panda pose | `robot.home_joints_rad` (the recorded eye-in-hand home) |
-| extras | | `velocity=` on `plan_cartesian_path`; `/joints` has `gripper_width_measured`; `/health` adds robot mode, safety mode, driver program, dashboard |
+| extras | | `velocity=` and `acceleration=` on every motion (see *Speed* below); `/joints` has `gripper_width_measured`; `/health` adds robot mode, safety mode, driver program, dashboard |
 | camera | RealSense D435 | `camera.backend`: Orbbec Gemini 2 (this arm's camera), RealSense or none. Same endpoints, depth always uint16 mm aligned to colour |
+
+## Speed: velocity and acceleration
+
+Every motion endpoint takes `velocity=` and `acceleration=` (query, or the JSON body of `POST /control/goto_joints`): MoveIt's
+scaling factors, 0.01–0.5 of the joint speed and acceleration limits (400 outside). Short moves are limited by the acceleration,
+so raising `velocity` alone barely shortens them; raise both. Each reply echoes the two values used.
+
+| endpoint | `velocity` default | `acceleration` default |
+|---|---|---|
+| `/control/goto_joints`, `/control/goto_pose` | 0.2 | 0.1 |
+| `/control/plan_cartesian_path`, `/control/rotate_tcp` | 0.05 | the velocity's value |
+| `/control/plan_joint_path` | 0.3 | 0.05 |
+| `/control/home` | 0.3 | 0.1 |
+
+`/control/resume` repeats the last motion with its values. `/control/nudge_joint` (recovery) stays at 0.15 / 0.05.
 
 ## Verified so far (2026-10-26)
 
