@@ -171,6 +171,9 @@ class RG6Gripper(_Base):
         self.timeout_s = float(g.get("program_timeout_s", 10.0))
         self.width_reg, self.force_reg = int(g["width_register"]), int(g["force_register"])
         self.feedback_reg = int(g.get("width_feedback_register", -1))
+        # (2026-11-19) the gripper's own object detection, written by the program after its move (Robotiq: rq_is_object_detected()
+        # as 1 / 0 into output_double_register_N); -1 = not written: object_detected stays null
+        self.object_reg = int(g.get("object_feedback_register", -1))
         from rtde_regs import RegisterWriter
         self._regs = RegisterWriter(cell.robot_ip)
 
@@ -186,6 +189,16 @@ class RG6Gripper(_Base):
             return self._regs.read_doubles([self.feedback_reg])[self.feedback_reg] / 1000.0
         except Exception:      # noqa: BLE001
             return None
+
+    def _read_object(self):
+        """the program's object detection: True / False, None when not configured or not readable"""
+        if self.object_reg < 0:
+            return None
+        try:
+            v = self._regs.read_doubles([self.object_reg])[self.object_reg]
+        except Exception:      # noqa: BLE001
+            return None
+        return None if v < 0 else v >= 0.5          # a negative value: the program wrote "unknown"
 
     # ---- the program run ----
 
@@ -293,6 +306,7 @@ class RG6Gripper(_Base):
         self.holding = False if outcome == "success" and not closing else None
         if outcome == "success":
             self._set_width(measured if measured is not None else w, measured is not None)
+        out["object_detected"] = self._read_object() if outcome == "success" else None
         out.update(outcome=outcome, width_m=self.width, width_measured=self.width_measured,
                    elapsed_s=round(time.time() - t0, 2))
         if failed is not None:

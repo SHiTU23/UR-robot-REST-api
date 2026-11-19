@@ -48,3 +48,29 @@ class TestWidthFeedback(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestObjectDetected(unittest.TestCase):
+    """(2026-11-19) the gripper program's own detection (Robotiq rq_is_object_detected) from an output register"""
+
+    def reader(self, reg, value=None, fail=False):
+        from gripper import RG6Gripper
+        g = RG6Gripper.__new__(RG6Gripper)
+        g.object_reg = reg
+
+        class Regs:
+            def read_doubles(self, regs):
+                if fail:
+                    raise OSError("no RTDE")
+                return {r: value for r in regs}
+        g._regs = Regs()
+        return g._read_object()
+
+    def test_not_configured(self):
+        self.assertIsNone(self.reader(-1, 1.0))
+
+    def test_values(self):
+        self.assertIs(self.reader(19, 1.0), True)
+        self.assertIs(self.reader(19, 0.0), False)
+        self.assertIsNone(self.reader(19, -1.0))
+        self.assertIsNone(self.reader(19, fail=True))

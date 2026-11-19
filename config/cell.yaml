@@ -71,6 +71,10 @@ gripper:
     open_program: uw_wara.urp        # one program for both, on the pendant (2026-11-16): width mm from register 18,
     close_program: uw_wara.urp       # force N from register 19 (converted to % on the pendant), writes rq_current_pos_mm()
     width_feedback_register: 18      # to output register 18; -1 = the program writes no width back
+    # (2026-11-19) the Robotiq's object detection, as object_detected in the gripper replies. Uncomment ONLY after uw_wara.urp writes it
+    # (an unwritten register reads 0 = "no object"): Script lines at the program's start  write_output_float_register(19, -1)
+    # and after the gripper move  if rq_is_object_detected(): write_output_float_register(19, 1) else: write_output_float_register(19, 0) end
+    # object_feedback_register: 19
 
 # Collision geometry fixed in the cell (base_link frame). Each line: name, size [x y z], centre [x y z].
 # MEASURE before trusting it: the sota UI's safe box (2026-09-16, freedrive probe of the TCP) was

@@ -298,7 +298,8 @@ def _gripper_body(res, attempts, rec_trig, rec_ok, **extra):
            "error_msg": res.get("error"), "gripper_width_m": res.get("width_m"),
            "width_measured": res.get("width_measured", False), "program": res.get("program"),
            "control_restored": res.get("control_restored"), "elapsed_s": res.get("elapsed_s"),
-           "notes": res.get("notes", []), "width_warning": res.get("width_warning")}
+           "notes": res.get("notes", []), "width_warning": res.get("width_warning"),
+           "object_detected": res.get("object_detected")}     # (2026-11-19) the gripper's own detection; null when its program does not report it
     out.update(extra)
     return jsonify(out), OUTCOME_STATUS.get(res["outcome"], 500)
 
@@ -620,11 +621,14 @@ def parse_goto(current):
     velocity = float(get("velocity", "0.2"))
     if not 0.01 <= velocity <= 0.5:
         raise ValueError("velocity must be in 0.01..0.5")
+    acceleration = float(get("acceleration", "0.1"))    # (2026-11-19) was always 0.1: short moves are acceleration-limited, so velocity alone hardly changed them
+    if not 0.01 <= acceleration <= 0.5:
+        raise ValueError("acceleration must be in 0.01..0.5")
     mjt = get("max_joint_travel_deg")
     mt = None if mjt is None else math.radians(float(mjt))
     if mt is not None and mt < 0:
         raise ValueError("max_joint_travel_deg must be >= 0")
-    return {"target": target, "unit": unit, "velocity": velocity, "max_travel": mt,
+    return {"target": target, "unit": unit, "velocity": velocity, "acceleration": acceleration, "max_travel": mt,
             "auto_recover": _flag(get("auto_recover")), "max_retries": int(get("max_retries", "1")),
             "dry_run": _flag(get("dry_run", "0"), False)}
 
@@ -648,7 +652,7 @@ def do_goto(g):
             return rej
 
     def plan_fn():
-        ok, traj, t, code, planner = C.motion.plan_joint_goal(target, vel=g["velocity"], acc=0.1)
+        ok, traj, t, code, planner = C.motion.plan_joint_goal(target, vel=g["velocity"], acc=g.get("acceleration", 0.1))
         return traj, ok, {"planning_time": t, "error_code": code, "planner_used": planner}
 
     if g["dry_run"]:
@@ -682,7 +686,7 @@ def goto_joints():
     """Move to an explicit joint configuration: joints=<6 values> (shoulder_pan .. wrist_3) and/or j1..j6=<value>
     to change single joints from the current pose; unit=rad|deg (default rad); POST JSON {"joints": [...],
     "unit": "deg"} too. Pilz PTP (straight in joint space, every joint monotonic), OMPL RRTConnect as fallback.
-    velocity=0.2 (0.01..0.5 scaling of the joint speed limits). dry_run=1 plans only and reports planner,
+    velocity=0.2 (0.01..0.5 scaling of the joint speed limits), acceleration=0.1 (0.01..0.5, of the acceleration limits). dry_run=1 plans only and reports planner,
     duration and per-joint travel. Target must be > joint_limit_margin_rad inside the limits (400
     target_near_limit) and collision-free (400 target_in_collision); big-swing guard max_joint_travel_deg=100
     except wrist_3 (409 plan_too_large; 0 disables); auto_recover=1, max_retries=1; /control/stop and

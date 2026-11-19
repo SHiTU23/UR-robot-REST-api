@@ -125,12 +125,21 @@ Before the first run on the **real arm**:
    On the pendant (Robotiq URCap installed, gripper set up in the Installation tab) make `uw_wara.urp` with
    one Script node (check the exact `rq_*` names in the Script node's function list for your URCap version):
    ```
+   write_output_float_register(19, -1)                                   # object detection: unknown until the move ends
    rq_activate_and_wait()
    rq_set_force_norm((read_input_float_register(19) - 20) / 215 * 100)   # N -> % (2F-85: 20-235 N)
    rq_set_speed_norm(50)
    rq_move_and_wait_mm(read_input_float_register(18))                   # mm; needs the URCap's mm calibration
    write_output_float_register(18, rq_current_pos_mm())
+   if rq_is_object_detected():                                         # the fingers stopped on something (force), not at the target
+     write_output_float_register(19, 1)
+   else:
+     write_output_float_register(19, 0)
+   end
    ```
+   With the two register-19 parts in the program, uncomment `object_feedback_register: 19` in the Robotiq block: every gripper
+   reply then has `object_detected` true / false (null without it, and always for the RG6). `/control/goto_joints` takes
+   `acceleration` (0.01–0.5, default 0.1) next to `velocity`.
    The first activation sweeps the fingers fully. The TCP (0.235 m) is derived from the model, not measured:
    measure it and set it (pendant + `/robot/tcp`) before grasping; set the payload on the pendant too.
 3. **Network:** the robot must reach this PC, because the driver uses reverse connections on ports
