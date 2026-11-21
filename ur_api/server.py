@@ -285,6 +285,11 @@ def build():
     log.info("scene v2 restored: %s", C.core.load_and_restore())
     import routes_surfaces                       # (2026-11-21) the tables turned to the chosen axes, cell.yaml footprints
     log.info("tables rebuilt (axes %s): %s", routes_surfaces.axes(), routes_surfaces.reconcile())
+    try:                                         # (2026-11-21) display-only RViz overlays (routes_viz), saved ones again
+        import routes_viz
+        log.info("RViz overlays published: %d markers", routes_viz.publish())
+    except Exception as e:  # noqa: BLE001
+        log.warning("RViz overlays not published: %s", e)
     C.core.send_colors()
     C.core.start_color_keeper()
     log.info("ready: %s, planning frame %s, tcp %s, gripper %s, camera %s%s", cell.ur_type, cell.planning_frame,
@@ -298,7 +303,8 @@ def register():
     import routes_scene
     import routes_surfaces
     import routes_tcp
-    for bp in (routes_robot.bp, routes_scene.bp, routes_plan.bp, routes_io.bp, routes_surfaces.bp, routes_tcp.bp):
+    import routes_viz
+    for bp in (routes_robot.bp, routes_scene.bp, routes_plan.bp, routes_io.bp, routes_surfaces.bp, routes_tcp.bp, routes_viz.bp):
         app.register_blueprint(bp)
 
 
