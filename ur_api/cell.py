@@ -62,6 +62,8 @@ class Cell:
         self.tcp_rpy = [0.0, 0.0, 0.0]
         self.tcp_source = f"config/grippers/{self.gripper_model}.yaml"
         self.tcp_file = (r.get("tcp_file") or "").replace("{model}", self.gripper_model) or None   # per gripper (ur_tcp.py)
+        import ur_tcp
+        self.tcp_mode = ur_tcp.mode_for(self.cfg, self.gripper_model)    # file | controller | follow
         # the model's limits; cell.yaml's gripper section (control settings) on top
         self.gripper = {k: gm[k] for k in ("max_width_m", "min_force_n", "max_force_n", "default_force_n")}
         # blocks named after a model (gripper.robotiq_2f85: {...}) override the shared lines for that model only

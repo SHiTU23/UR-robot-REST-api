@@ -17,7 +17,10 @@ robot:
   # One file per gripper ({model} = rg6 | robotiq_2f85): switching grippers never overwrites the other one's TCP.
   tcp_file: /app/config/calibration/tcp_{model}.yaml
   # file: the saved TCP wins (the controller is only compared). controller: re-read the pendant's active TCP at every
-  # start. Not "controller" with the RG6: its URCap switches the active TCP to its own (234 mm, turned 180 deg).
+  # start. follow: as controller, and while running too: a changed active TCP (e.g. TCP_1 edited on the pendant) is
+  # saved and the API + ROS side restart with it, once the arm is idle (ur_api/tcp_follow.py, ~30-60 s).
+  # A gripper's block below (gripper.<model>.tcp_mode) overrides this for that gripper.
+  # Not "controller"/"follow" with the RG6: its URCap switches the active TCP to its own (234 mm, turned 180 deg).
   tcp_mode: file
   # How the base is turned in the room, seen from above (+ = counter-clockwise). Used by RViz's view and by frame=room;
   # base_link coordinates and saved poses do not change. The power cable is about 45 deg off the back of the robot
@@ -40,11 +43,30 @@ tool:
   # 2026-09-15 (~/sota/ui/calibration/hand_eye.json, 9 samples, 1.3 mm rms), as T_tool0_camera.
   camera_xyz_m: [-0.06705131293308766, -0.11714507665028767, 0.10717890409021669]
   camera_rpy_rad: [-0.03436, 0.01537, -0.50800]   # computed from that rotation matrix (sxyz; round trip 3e-16)
-  camera_box_m: [0.094, 0.029, 0.034]            # Gemini 2 body ~90 x 25 x 30 mm + 2 mm per side (x image right, y down, z optical axis)
-  camera_box_center_m: [0.0, 0.0, -0.015]        # MEASURE: body centre behind the optical centre
+  # (2026-11-20) Orbbec Gemini 2 datasheet: 90 x 25 x 30 mm (W x H x D) +-0.5 mm, 2 x M3 on the back; + 1 mm per side.
+  # In the colour camera's optical frame (x image right, y down, z optical axis).
+  camera_box_m: [0.092, 0.027, 0.032]
+  # The body centre from the colour lens, DERIVED 2026-11-20 (not measured with a tool): the mount plate
+  # (~/Downloads/RealsenseMount.stl, camera_mount_plate below) holds the camera's back by the two M3 holes; with the
+  # hand-eye of 2026-11-20 12:31 the holes' midpoint lies 15.7 mm along image x and 2.9 mm up (-y) from the lens, and
+  # the plate face (4.6 mm) + the 30 mm body put the front face 2.7 mm below the lens: centre 30/2 - 2.7 = 12.3 mm behind.
+  camera_box_center_m: [0.0157, -0.0029, -0.0123]
   bracket_size_m: [0.045, 0.110, 0.030]          # MEASURE: camera bracket between the changer and the camera
   bracket_xyz_m: [-0.030, -0.060, 0.090]         # MEASURE
   bracket_rpy_rad: [0.0, 0.0, -0.50800]
+  # (2026-11-20) The camera mount plate (~/Downloads/RealsenseMount.stl, mm): a ring clamped on the flange (r 35.75)
+  # and an arm out to the camera, whose back is screwed to the arm's end (2 x M3, 44.8 mm apart, midpoint 100.35 mm
+  # from the flange axis). Plate frame: origin the flange centre, z = tool0 z, y towards the camera, x along the
+  # screw holes = minus the image x (how the camera sits on it). With a saved camera_mount the bracket box is the
+  # plate's arm, turned so (ur_api/camera_mount.py bracket); its ring lies inside the tool changer's cylinder.
+  camera_mount_plate:
+    arm_x_m: [-0.0295, 0.0295]
+    arm_y_m: [0.0300, 0.1073]
+    thickness_m: 0.0046
+  # (2026-11-20) The client's hand-eye calibration, sent with PUT /robot/camera_mount (pipeFit does it when a calibration
+  # is accepted): when this file exists it replaces camera_xyz_m / camera_rpy_rad above, and the bracket box becomes a
+  # bar from the changer to the camera (bracket_size_m gives its width and thickness). ur_api/camera_mount.py
+  camera_mount_file: /app/config/calibration/camera_mount.yaml
 
 # OnRobot RG6 driven like ~/sota/ui/robot.py: write width (mm) and force (N) into RTDE input
 # registers, then play a pendant program that reads them, then hand control back to the driver.
@@ -68,10 +90,13 @@ gripper:
   # listed here comes from the lines above. The RG6 uses the lines above as they are.
   robotiq_2f85:
     type: pendant                  # pendant program like the RG6; comment out -> gripper endpoints answer 501
-    open_program: uw_wara.urp        # one program for both, on the pendant (2026-11-16): width mm from register 18,
-    close_program: uw_wara.urp       # force N from register 19 (converted to % on the pendant), writes rq_current_pos_mm()
+    # open_program: uw_wara.urp      # until 2026-11-20
+    # close_program: uw_wara.urp
+    open_program: aikido.urp         # one program for both, on the pendant (2026-11-20, replaces uw_wara.urp): width mm
+    close_program: aikido.urp        # from register 18, force N from register 19, writes rq_current_pos_mm()
     width_feedback_register: 18      # to output register 18; -1 = the program writes no width back
-    # (2026-11-19) the Robotiq's object detection, as object_detected in the gripper replies. Uncomment ONLY after uw_wara.urp writes it
+    tcp_mode: follow                 # (2026-11-20) the TCP is the pendant's active one (TCP_1), kept up to date
+    # (2026-11-19) the Robotiq's object detection, as object_detected in the gripper replies. Uncomment ONLY after aikido.urp writes it
     # (an unwritten register reads 0 = "no object"): Script lines at the program's start  write_output_float_register(19, -1)
     # and after the gripper move  if rq_is_object_detected(): write_output_float_register(19, 1) else: write_output_float_register(19, 0) end
     # object_feedback_register: 19

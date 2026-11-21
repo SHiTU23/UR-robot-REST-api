@@ -351,6 +351,8 @@ class Motion:
                 h.cancel_goal_async()
             except Exception:      # noqa: BLE001
                 pass
+        import recover             # (2026-11-20) the real arm's controller can keep the cancelled goal: clear it
+        recover.after_stop()
         return len(goals)
 
     def clear_stop(self):

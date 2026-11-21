@@ -62,6 +62,7 @@ def with_lock(fn):
             return fn(*a, **kw)
         finally:
             C.activity = None
+            C.last_activity_end = time.time()
             C.lock.release()
     return wrapper
 
@@ -987,18 +988,33 @@ def stop():
     return jsonify({"status": "stopped", "msg": "Robot stopped", "trajectories_cancelled": n}), 200
 
 
-@bp.route("/recover", methods=["GET"])
+@bp.route("/recover", methods=["GET", "POST"])
 def recover():
     """Clear what software may clear: unlock a protective stop (the controller refuses this in the first 5 s),
     close safety popups, and resend the driver's program when it is not running. Emergency / safeguard stops
-    need the hardware. 504 if it did not work within 15 s."""
+    need the hardware. 504 if it did not work within 15 s.
+    (2026-11-20) Then MoveIt: goals a Stop left active are cleared (the trajectory controller restarts, no motion) and an
+    empty trajectory checks that MoveIt takes goals again; if it does not, the API and the ROS side restart (202,
+    ~30-60 s). "moveit" in the answer says what was done. 409 while a motion runs."""
     ok, why = C.motion.recover()
     if not ok:
         return jsonify({"status": "timeout", "error": why or "recovery did not complete within timeout",
                         "safety_mode": SAFETY_NAMES.get(C.motion.safety_mode()),
                         "robot_mode": ROBOT_MODE_NAMES.get(C.motion.robot_mode()),
                         "program_running": C.motion.program_running()}), 504
-    return jsonify({"status": "recovered", "msg": "Robot recovered"}), 200
+    if not C.lock.acquire(blocking=False):
+        return busy()
+    import recover as R
+    restarting = False
+    try:
+        code, m = R.run(os.environ.get("UR_STATE_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")))
+        restarting = code == 202
+    finally:
+        if not restarting:                  # a restart keeps the lock: no motion may start before the process exits
+            C.lock.release()
+    if code == 200:
+        return jsonify({"status": "recovered", "msg": "Robot recovered: " + m["msg"], "moveit": m}), 200
+    return jsonify({"status": m["outcome"], "msg": m["msg"], "moveit": m}), code
 
 
 @bp.route("/health", methods=["GET"])

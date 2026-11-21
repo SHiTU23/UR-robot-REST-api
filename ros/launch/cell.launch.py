@@ -25,18 +25,25 @@ GM = yaml.safe_load(open(os.path.join(HERE, "..", "..", "config", "grippers", GR
 TCP_FILE = (CELL["robot"].get("tcp_file") or "").replace("{model}", GRIPPER) or None   # this gripper's saved TCP (ur_tcp.py)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ur_api"))
 import ur_tcp  # noqa: E402
+import camera_mount  # noqa: E402
 
 
 def _tcp(mock, ip):
-    """Hand the saved TCP to the URDF through env UR_TCP. The saved file wins (robot.tcp_mode: file, the default): the
+    """Hand the saved TCP to the URDF through env UR_TCP. The saved file wins (tcp_mode: file, the default): the
     controller is read only to create it when there is none, and to warn when its active TCP differs. tcp_mode:
-    controller reads and saves it at every start (the old behaviour). None saved (or for another gripper): the model's."""
-    mode = CELL["robot"].get("tcp_mode", "file")
+    controller / follow read the controller's active TCP at every start and save it when it differs (follow also keeps
+    it up to date while running: ur_api/tcp_follow.py). None saved (or for another gripper): the model's.
+    The mode: gripper.<model>.tcp_mode, else robot.tcp_mode (ur_tcp.mode_for)."""
+    mode = ur_tcp.mode_for(CELL, GRIPPER)
+    print(f"[cell.launch] tcp_mode {mode} for {GRIPPER}", flush=True)
     d = ur_tcp.load(TCP_FILE, GRIPPER) if TCP_FILE else None
     if TCP_FILE and not mock:
         try:
             live = ur_tcp.read_tcp(ip)
-            if mode == "controller" or d is None:
+            if d is None or (mode in ("controller", "follow") and not ur_tcp.same(live, d["xyz_m"], d["rpy_rad"])):
+                why = ur_tcp.check(live[:3])
+                if why:
+                    raise RuntimeError(f"the controller's active TCP {[round(v, 5) for v in live]} is not plausible: {why}")
                 d = ur_tcp.save(TCP_FILE, live, GRIPPER, ip)
                 print(f"[cell.launch] TCP read from the controller at {ip} and saved to {TCP_FILE}", flush=True)
             elif max(abs(a - b) for a, b in zip(live[:3], d["xyz_m"])) > 0.001 or \
@@ -50,10 +57,20 @@ def _tcp(mock, ip):
     print(f"[cell.launch] TCP: {'xyz ' + str(d['xyz_m']) + ' rpy ' + str(d['rpy_rad']) + ' (' + ur_tcp.describe(d) + ', ' + TCP_FILE + ')' if d else 'from the gripper model (config/grippers/)'}", flush=True)
 
 
+def _camera():
+    """(2026-11-20) Hand the saved camera mount (the client's hand-eye calibration, PUT /robot/camera_mount) to the URDF
+    through env UR_CAMERA_MOUNT; none saved: tool.camera_xyz_m / camera_rpy_rad of config/cell.yaml, as before."""
+    path = camera_mount.path_for(CELL)
+    d = camera_mount.load(path)
+    os.environ["UR_CAMERA_MOUNT"] = camera_mount.as_arg(d, CELL["tool"]) if d else ""
+    print(f"[cell.launch] camera mount: {'xyz ' + str(d['xyz_m']) + ' rpy ' + str(d['rpy_rad']) + ' (' + path + ', ' + str((d.get('source') or {}).get('at')) + ')' if d else 'config/cell.yaml tool.camera_*'}", flush=True)
+
+
 def _nodes(context):
     lc = lambda n: LaunchConfiguration(n).perform(context)  # noqa: E731
     mock = lc("use_mock_hardware").lower() == "true"
     _tcp(mock, lc("robot_ip") or CELL["robot"]["ip"])
+    _camera()
     calibration = {"kinematics_params_file": KINEMATICS} if KINEMATICS else {}
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(

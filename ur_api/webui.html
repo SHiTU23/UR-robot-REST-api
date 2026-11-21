@@ -116,7 +116,8 @@
       <option>depth</option></select></div>
     <div class="row"><label><input type="checkbox" id="expo-auto" style="width:auto"> Auto exposure</label></div>
     <div class="row">exposure <input id="expo-val" type="number" step="1"> gain <input id="expo-gain" type="number" step="1">
-      <button id="b-expo">Apply</button></div>
+      <button id="b-expo">Apply</button>
+      <button id="b-expo-reset" title="Undo the exposure and gain changes: back to config/cell.yaml's values (auto exposure when it sets none)">Reset to default</button></div>
     <p class="mut" id="expo-info"></p>
   </section>
   <section style="grid-column:1/-1">
@@ -268,6 +269,7 @@ async function exposure(query, label) {
   else { $("expo-info").textContent = `Exposure: ${body.msg || body.error || status}`; if (label) log(`${label}: ${status} ${body.msg || body.error || ""}`); }
 }
 $("expo-auto").onchange = () => { $("expo-auto").checked ? exposure("?auto=1", "auto exposure on") : exposure("?auto=0", "auto exposure off"); };
+$("b-expo-reset").onclick = () => exposure("?reset=1", "exposure reset to default");
 $("b-expo").onclick = () => exposure(`?auto=0&exposure=${encodeURIComponent($("expo-val").value)}&gain=${encodeURIComponent($("expo-gain").value)}`, "exposure");
 exposure("");
 function pill(id, text, cls) { const e = $(id); e.textContent = text; e.className = "pill " + (cls || ""); }

@@ -304,6 +304,8 @@ def main():
     auth.load_token(os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state")))
     build()
     register()
+    import tcp_follow
+    tcp_follow.start(os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state")))
     host, port = os.environ.get("UR_API_HOST", "127.0.0.1"), int(os.environ.get("UR_API_PORT", "5000"))
     if host not in ("127.0.0.1", "localhost", "::1"):
         log.warning("listening on %s: the token and all commands cross that network unencrypted", host)

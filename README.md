@@ -87,7 +87,7 @@ the API's limits all follow it. The tool changer, camera and bracket stay the sa
 | model | from | on the real arm | width | force | TCP (flange → closed fingertips) |
 |---|---|---|---|---|---|
 | `rg6` | MIT meshes from [BrettRD/onrobot_grippers](https://github.com/BrettRD/onrobot_grippers) | pendant programs (below) | 0–160 mm | 25–120 N | 0.322 m, **measured** |
-| `robotiq_2f85` | official `ros-jazzy-robotiq-description`, on Robotiq's UR adapter | pendant program `uw_wara.urp` (below), **not yet tried on the arm** | 0–85 mm | 20–235 N | 0.235 m, **derived** (same flange + changer, adapter + model) |
+| `robotiq_2f85` | official `ros-jazzy-robotiq-description`, on Robotiq's UR adapter | pendant program `aikido.urp` (below; was `uw_wara.urp`), **not yet tried on the arm** | 0–85 mm | 20–235 N | 0.235 m, **derived** (same flange + changer, adapter + model) |
 
 - Both grippers close their fingers on a linkage, so the finger joint is an angle, not half the width.
   `config/grippers/<model>.yaml` holds the table between joint angle, width and fingertip depth. It is
@@ -122,7 +122,7 @@ Before the first run on the **real arm**:
    width with `width_measured: false`, and a grasp counts as successful once the program finishes.
    **Robotiq 2F-85 instead:** start with `UR_GRIPPER=robotiq_2f85` (or `gripper.model: robotiq_2f85`). Its block
    `gripper.robotiq_2f85` in `config/cell.yaml` replaces only the program names; the RG6 settings stay untouched.
-   On the pendant (Robotiq URCap installed, gripper set up in the Installation tab) make `uw_wara.urp` with
+   On the pendant (Robotiq URCap installed, gripper set up in the Installation tab) make `aikido.urp` with
    one Script node (check the exact `rq_*` names in the Script node's function list for your URCap version):
    ```
    write_output_float_register(19, -1)                                   # object detection: unknown until the move ends
@@ -198,8 +198,9 @@ rejects leaves the previous settings in place. Changes last until the server res
 /camera/exposure                      # read: auto, exposure, gain and their ranges
 /camera/exposure?exposure=200&gain=20 # by hand (turns auto off)
 /camera/exposure?auto=1               # the camera decides
+/camera/exposure?reset=1              # undo the changes: cell.yaml's values, or auto when it sets none
 ```
-Colour stream only, in the camera's own units. The panel has the same controls. It lasts until the server restarts; to
+Colour stream only, in the camera's own units. The panel has the same controls, and "Reset to default" for reset=1. It lasts until the server restarts; to
 keep it, set `camera.auto_exposure`, `exposure` and `gain` in `config/cell.yaml`.
 
 ## RViz view
@@ -320,10 +321,35 @@ curl -X POST localhost:5000/robot/tcp/from_controller # save the controller's ac
 
 - `robot.tcp_mode: file` (default): the saved TCP wins. At start the controller is read only to compare (a NOTE in
   `./run.sh logs` when it differs), or to create the file if there is none. `controller`: re-read at every start.
-- **Don't use `controller` mode with the RG6.** Its URCap switches the active TCP to its own (234 mm, turned 180°)
+- `follow` (the Robotiq's block, `gripper.robotiq_2f85.tcp_mode`, since 2026-11-20): like `controller`, and while
+  running the API reads the controller's active TCP every 5 s (read-only). When it changes (e.g. TCP_1 edited on the
+  pendant) and is the same on two reads, plausible, and the arm has been idle for 15 s, the API saves it and restarts
+  itself and the ROS side (`state/restart_ros` → `ros/scripts/cell.sh`): about 30–60 s, the arm does not move. At most
+  one restart per 2 min. A gripper's own `tcp_mode` overrides `robot.tcp_mode`.
+- **Don't use `controller` or `follow` mode with the RG6.** Its URCap switches the active TCP to its own (234 mm, turned 180°)
   whenever an RG6 node runs, so the pendant's Installation screen and the active TCP disagree.
 - PUT refuses z outside 0.02–0.8 m (so millimetres are caught) and x, y more than 0.2 m off the flange axis. It warns
   when z is more than 5 mm off the gripper model's fingertips, or when the TCP is rotated.
+
+## Wrist camera pose (hand-eye)
+
+The `wrist_camera` link (and the bracket box) is part of the robot description: RViz shows it there, and the
+planning scene checks it against the bin and the tables. Its pose on the flange comes from the client's hand-eye
+calibration, not from hand-typed numbers:
+
+```bash
+curl localhost:5000/robot/camera_mount                # in use (the loaded link), saved, restart_required
+curl -X PUT -H 'Content-Type: application/json' localhost:5000/robot/camera_mount \
+     -d '{"T_tool0_camera": [[...4x4, tool0 -> camera optical frame...]], "apply": true}'
+```
+
+It is saved to `config/calibration/camera_mount.yaml` (`tool.camera_mount_file`). `cell.launch.py` hands it to the
+URDF at every start through env `UR_CAMERA_MOUNT`. With `"apply": true`, the API and the ROS side restart at once
+(202, about 30-60 s; refused while anything runs; the arm does not move). If the mount is unchanged (within 1 mm and
+0.2 deg), nothing restarts. With the file present, the bracket becomes a bar from the tool changer out to the camera
+body (width and thickness from `bracket_size_m`). Without the file, `tool.camera_xyz_m` / `camera_rpy_rad` /
+`bracket_*` of `config/cell.yaml` are used, as before. pipeFit sends its accepted calibration automatically
+(`ur_calib.send_camera_mount`).
 
 ## Tables (pick and place heights)
 

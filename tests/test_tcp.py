@@ -88,7 +88,7 @@ class TestTcpRoutes(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         cell = types.SimpleNamespace(tcp_xy=[0.0, 0.0], tcp_z=0.23435, tcp_rpy=[0.0, 0.0, -3.14159], tcp_source="x",
                                      tcp_file=os.path.join(self.dir.name, "tcp.yaml"), gripper_model="rg6",
-                                     model_tcp_z=0.322, robot_ip="192.0.2.1", cfg={"robot": {}})
+                                     model_tcp_z=0.322, robot_ip="192.0.2.1", cfg={"robot": {}}, tcp_mode="file")
         self._old = {k: getattr(ctx.C, k, None) for k in ("cell", "mock")}
         ctx.C.cell, ctx.C.mock = cell, True
         app = Flask("t")
@@ -129,3 +129,41 @@ def jsonify_err(e):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTcpMode(unittest.TestCase):
+    """tcp_mode: a gripper's block overrides robot.tcp_mode; same() compares a controller TCP with one in use."""
+
+    def test_mode_for(self):
+        cfg = {"robot": {"tcp_mode": "file"}, "gripper": {"model": "rg6", "robotiq_2f85": {"tcp_mode": "follow"}}}
+        self.assertEqual(ur_tcp.mode_for(cfg, "rg6"), "file")
+        self.assertEqual(ur_tcp.mode_for(cfg, "robotiq_2f85"), "follow")
+        self.assertEqual(ur_tcp.mode_for({"robot": {}}, "rg6"), "file")
+        with self.assertRaises(ValueError):
+            ur_tcp.mode_for({"robot": {"tcp_mode": "live"}}, "rg6")
+
+    def test_same(self):
+        live = [0.0001, 0.0, 0.195, -0.0162, 0.0254, -1.5484]       # the pendant's TCP_1, read 2026-11-20
+        rpy = ur_tcp.rotvec_to_rpy(live[3:])
+        self.assertTrue(ur_tcp.same(live, live[:3], rpy))
+        self.assertTrue(ur_tcp.same(live, [0.0002, 0.0, 0.195], rpy))                 # 0.1 mm
+        self.assertFalse(ur_tcp.same(live, [0.0, 0.0, 0.1955], rpy))                  # 0.5 mm
+        self.assertFalse(ur_tcp.same(live, live[:3], [rpy[0], rpy[1], rpy[2] + 0.01]))  # 0.57 deg
+        self.assertFalse(ur_tcp.same(live, [0, 0, 0.192], [0, 0, 0.628319]))         # the TCP saved 2026-11-16
+
+
+class TestTcpModeOverride(unittest.TestCase):
+    """state/tcp_mode.json (set through the API) wins over config/cell.yaml, per gripper."""
+
+    def test_override(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "tcp_mode.json")
+            cfg = {"robot": {"tcp_mode": "file"}, "gripper": {"robotiq_2f85": {"tcp_mode": "follow"}}}
+            self.assertEqual(ur_tcp.mode_for(cfg, "robotiq_2f85", path), "follow")
+            ur_tcp.set_mode_override("robotiq_2f85", "file", path)
+            self.assertEqual(ur_tcp.mode_for(cfg, "robotiq_2f85", path), "file")
+            self.assertEqual(ur_tcp.mode_for(cfg, "rg6", path), "file")
+            ur_tcp.set_mode_override("robotiq_2f85", None, path)
+            self.assertEqual(ur_tcp.mode_for(cfg, "robotiq_2f85", path), "follow")
+            with self.assertRaises(ValueError):
+                ur_tcp.set_mode_override("rg6", "live", path)

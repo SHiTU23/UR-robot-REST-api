@@ -2,7 +2,9 @@
 the API (PUT /robot/tcp) or copied from the controller's active TCP (POST /robot/tcp/from_controller, ./run.sh save-tcp).
 
 The saved file is what counts: ros/launch/cell.launch.py builds the tcp link from it at each start. The controller is
-read only when no file exists yet (robot.tcp_mode: file, the default), or at every start (tcp_mode: controller). Why
+read only when no file exists yet (robot.tcp_mode: file, the default), at every start (tcp_mode: controller), or kept
+up to date while running (tcp_mode: follow, ur_api/tcp_follow.py: a changed active TCP is saved and the stack restarts).
+A gripper's own block (gripper.<model>.tcp_mode in config/cell.yaml) overrides robot.tcp_mode for that gripper. Why
 not always the controller: a program can switch the active TCP behind the operator's back (the OnRobot URCap sets its
 own, 234 mm turned 180 deg, when an RG6 node runs), and the API's motions never use the controller's TCP anyway: they
 are joint trajectories planned to the URDF's tcp link.
@@ -18,6 +20,13 @@ import time
 import yaml
 
 RTDE_PORT = 30004
+MODES = ("file", "controller", "follow")
+# The mode chosen through the API (PUT /robot/tcp or POST /robot/tcp/from_controller with "mode"), per gripper: wins over
+# config/cell.yaml, so "accept these values" on a client is not undone by follow. {"robotiq_2f85": "file", ...}
+MODE_FILE = os.path.join(os.environ.get("UR_STATE_DIR") or os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "state"), "tcp_mode.json")
+SAME_MM = 0.2                      # a controller TCP within this (any axis) and SAME_DEG of the one in use is the same TCP
+SAME_DEG = 0.05
 XY_MAX_M = 0.2                     # plausibility: the fingertip centre within 200 mm of the flange axis
 Z_RANGE_M = (0.02, 0.8)            # and 20..800 mm along it
 
@@ -88,6 +97,64 @@ def rpy_to_rotvec(rpy):
         ax = [-v for v in ax]
     n = math.sqrt(sum(v * v for v in ax))
     return [th * v / n for v in ax]
+
+
+def mode_override(gripper_model, path=None):
+    """The mode set through the API for this gripper (state/tcp_mode.json), or None."""
+    try:
+        with open(path or MODE_FILE) as f:
+            m = (yaml.safe_load(f) or {}).get(gripper_model)
+    except (OSError, yaml.YAMLError, AttributeError):
+        return None
+    return m if m in MODES else None
+
+
+def set_mode_override(gripper_model, mode, path=None):
+    """Remember the mode for this gripper (None: forget it, the config's applies again)."""
+    path = path or MODE_FILE
+    try:
+        with open(path) as f:
+            d = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        d = {}
+    if mode is None:
+        d.pop(gripper_model, None)
+    else:
+        if mode not in MODES:
+            raise ValueError(f"mode {mode!r}: one of {MODES}")
+        d[gripper_model] = mode
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as f:
+        f.write(__import__("json").dumps(d, indent=1) + "\n")       # JSON is YAML: mode_override reads it
+    os.replace(path + ".tmp", path)
+
+
+def mode_for(cell_cfg, gripper_model, override_path=None):
+    """file | controller | follow: the one set through the API (state/tcp_mode.json) wins, then the gripper's block
+    (gripper.<model>.tcp_mode), then robot.tcp_mode."""
+    block = (cell_cfg.get("gripper") or {}).get(gripper_model)
+    m = mode_override(gripper_model, override_path) or \
+        (block.get("tcp_mode") if isinstance(block, dict) else None) or (cell_cfg.get("robot") or {}).get("tcp_mode") or "file"
+    if m not in MODES:
+        raise ValueError(f"tcp_mode {m!r} for {gripper_model}: one of {MODES}")
+    return m
+
+
+def same(tcp, xyz_m, rpy_rad):
+    """True if the controller TCP [x, y, z, rx, ry, rz] is the TCP xyz_m + rpy_rad (within SAME_MM / SAME_DEG)."""
+    if max(abs(a - b) for a, b in zip(tcp[:3], xyz_m)) * 1000 > SAME_MM:
+        return False
+    a, b = _R(rotvec_to_rpy(tcp[3:6])), _R(rpy_rad)
+    tr = sum(a[i][j] * b[i][j] for i in range(3) for j in range(3))          # trace(a^T b)
+    return math.degrees(math.acos(max(-1.0, min(1.0, (tr - 1) / 2)))) <= SAME_DEG
+
+
+def _R(rpy):
+    r, p, y = rpy
+    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+    return [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr]]
 
 
 def check(xyz):

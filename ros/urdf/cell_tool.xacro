@@ -21,7 +21,7 @@
     </link>
   </xacro:macro>
 
-  <xacro:macro name="cell_tool" params="tf_prefix cell gripper grippers_dir tcp:=''">
+  <xacro:macro name="cell_tool" params="tf_prefix cell gripper grippers_dir tcp:='' camera_mount:=''">
     <xacro:property name="t" value="${cell['tool']}"/>
     <xacro:property name="model" value="${gripper if gripper else cell['gripper']['model']}"/>
     <xacro:property name="gm" value="${xacro.load_yaml(grippers_dir + '/' + model + '.yaml')}"/>
@@ -71,8 +71,10 @@
     </joint>
 
     <!-- wrist camera at its hand-eye pose (camera optical frame: x right, y down, z forward) -->
-    <xacro:property name="cxyz" value="${t['camera_xyz_m']}"/>
-    <xacro:property name="crpy" value="${t['camera_rpy_rad']}"/>
+    <!-- (2026-11-20) the saved hand-eye (camera_mount, 15 numbers) wins over cell.yaml's: camera xyz rpy, bracket xyz rpy size -->
+    <xacro:property name="pcm" value="${[float(v) for v in str(camera_mount).split()]}"/>
+    <xacro:property name="cxyz" value="${pcm[0:3] if pcm else t['camera_xyz_m']}"/>
+    <xacro:property name="crpy" value="${pcm[3:6] if pcm else t['camera_rpy_rad']}"/>
     <xacro:property name="cb" value="${t['camera_box_m']}"/>
     <xacro:property name="cc" value="${t['camera_box_center_m']}"/>
     <xacro:cell_box name="${tf_prefix}wrist_camera" size="${cb[0]} ${cb[1]} ${cb[2]}" xyz="${cc[0]} ${cc[1]} ${cc[2]}"
@@ -82,9 +84,9 @@
       <child link="${tf_prefix}wrist_camera"/>
       <origin xyz="${cxyz[0]} ${cxyz[1]} ${cxyz[2]}" rpy="${crpy[0]} ${crpy[1]} ${crpy[2]}"/>
     </joint>
-    <xacro:property name="bs" value="${t['bracket_size_m']}"/>
-    <xacro:property name="bx" value="${t['bracket_xyz_m']}"/>
-    <xacro:property name="br" value="${t['bracket_rpy_rad']}"/>
+    <xacro:property name="bs" value="${pcm[12:15] if pcm else t['bracket_size_m']}"/>
+    <xacro:property name="bx" value="${pcm[6:9] if pcm else t['bracket_xyz_m']}"/>
+    <xacro:property name="br" value="${pcm[9:12] if pcm else t['bracket_rpy_rad']}"/>
     <xacro:cell_box name="${tf_prefix}camera_bracket" size="${bs[0]} ${bs[1]} ${bs[2]}" xyz="0 0 0" rpy="0 0 0"
                     rgba="0.3 0.3 0.35 1"/>
     <joint name="${tf_prefix}tool0-camera_bracket" type="fixed">

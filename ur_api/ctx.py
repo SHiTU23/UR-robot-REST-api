@@ -21,6 +21,7 @@ class Ctx:
     poses_path = None    # named poses saved with POST /robot/poses
     lock = threading.Lock()     # THE motion lock: motion + gripper endpoints, scene commits; non-blocking -> 409
     last_motion = None          # for /control/resume
+    last_activity_end = 0.0     # when the lock was last released (tcp_follow restarts only after a quiet spell)
     activity = None             # what holds the lock: {"what", "since"}, shown by /health and the panel
 
 

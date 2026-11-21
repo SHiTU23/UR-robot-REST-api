@@ -6,6 +6,10 @@
 # starts the container again, now with the new gripper. Arguments go to the launch file.
 SEL=/app/state/gripper_model
 sel() { { tr -d '[:space:]' < "$SEL"; } 2>/dev/null || true; }
+# The API asks for a restart here when the TCP changed (tcp_mode: follow, ur_api/tcp_follow.py): the launch rebuilds
+# the robot description with it. The file is deleted once the launch has stopped, which tells the API to exit too.
+RESTART_REQ=/app/state/restart_ros
+rm -f "$RESTART_REQ"
 
 forced=${UR_GRIPPER:-}
 picked=$(sel)
@@ -31,6 +35,12 @@ while kill -0 "$pid" 2>/dev/null; do
   if [ -z "$forced" ] && [ "$(sel)" != "$picked" ]; then
     echo "[cell.sh] gripper changed on the web page ('$picked' -> '$(sel)'): restarting the ROS side"
     stop_launch
+    exit 0
+  fi
+  if [ -f "$RESTART_REQ" ]; then
+    echo "[cell.sh] the API asked for a restart ($(cat "$RESTART_REQ" 2>/dev/null)): restarting the ROS side"
+    stop_launch
+    rm -f "$RESTART_REQ"
     exit 0
   fi
 done

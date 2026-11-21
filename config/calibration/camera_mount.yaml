@@ -1,0 +1,18 @@
+# The wrist camera's pose on the flange (tool0 -> camera optical frame: x right, y down, z forward), the
+# hand-eye calibration (ur_api/camera_mount.py). Set with PUT /robot/camera_mount; used at the next start.
+xyz_m:
+- -0.057499
+- -0.106006
+- 0.09273
+rpy_rad:
+- 0.001115
+- 0.002597
+- -0.399642
+source:
+  set_by: api
+  at: 2026-11-21T13:50:35+0000
+  note: pipeFit hand-eye calibration, run 20261121-144946, 0.49 mm rms
+  client:
+    client: pipeFit
+    run: 20261121-144946
+    accepted_at: '2026-11-21T14:50:35+01:00'
