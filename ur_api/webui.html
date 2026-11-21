@@ -83,7 +83,7 @@
       <button data-r="x-">rot x −</button><button data-r="y-">rot y −</button><button data-r="z-">rot z −</button>
     </div>
     <div class="row"><button id="b-down">Point straight down</button></div>
-    <p class="mut">Room axes follow the room; robot axes are turned with the base. Each press is one MoveL; STOP / Esc cancels.</p>
+    <p class="mut">Room axes follow the room; robot axes are turned with the base. Each press is one MoveL; STOP / Esc cancels. The jog axes also set how the tables lie in RViz and the collision checks.</p>
   </section>
   <section>
     <h2 id="g-title">Gripper</h2>
@@ -221,6 +221,10 @@ $("b-delpose").onclick = async () => { const p = needPose();
   if (p && confirm(`Delete the saved pose "${p.name}"?`)) { await act(`delete pose "${p.name}"`, `/robot/poses/${encodeURIComponent(p.name)}`, { method: "DELETE" }); await loadPoses(); } };
 loadPoses();
 let last = null;
+// (2026-11-21) the table boxes' edges follow the jog axes selector: the API keeps the choice (PUT /cell/surfaces/axes), the page shows it
+api("/cell/surfaces/axes").then(({ status, body }) => { if (status === 200 && body.axes) $("jframe").value = body.axes === "room" ? "room" : "base_link"; });
+$("jframe").onchange = () => { const a = $("jframe").value === "room" ? "room" : "robot";
+  act(`tables along the ${a} axes`, "/cell/surfaces/axes", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ axes: a }) }); };
 document.querySelectorAll("[data-j]").forEach((b) => b.onclick = () => {
   if (!last) return;
   const ax = b.dataset.j[0], sg = b.dataset.j[1] === "+" ? 1 : -1, st = parseFloat($("step").value);

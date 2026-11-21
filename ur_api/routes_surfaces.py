@@ -14,8 +14,17 @@ the measured point and its top is at the measured height.
 The boxes live in the scene namespace "cell.surfaces" (ids cell.surfaces.<name>): they persist and are restored at
 start like every scene v2 object, show in RViz, and a client's /scene/batch on its own namespace leaves them alone.
 Nothing here moves the robot; changes take the motion lock (409 busy while a motion runs). Bins and other objects keep
-coming from the client through /scene/batch, e.g. once the bin's position is calibrated."""
+coming from the client through /scene/batch, e.g. once the bin's position is calibrated.
+
+(2026-11-21, the operator) The boxes' edges follow the axes chosen on the web page (the jog "axes" selector):
+    GET|PUT /cell/surfaces/axes {axes: room | robot}  room = the room's axes (robot.room_yaw_deg: the boxes are turned
+                                             by minus that angle in base_link), robot = base_link's. Kept in
+                                             state/surfaces_axes.json (default room). A change rebuilds the boxes at
+                                             their measured heights and centres, nothing is measured again.
+At every API start the boxes are rebuilt the same way when their turn or footprint (cell.yaml size_m) changed."""
+import json
 import math
+import os
 import threading
 import time
 
@@ -29,6 +38,61 @@ NS = "cell.surfaces"
 MAX_POINTS = 1000
 _calibrating = {}            # name -> {"since", "previous": the scene object or None}
 _cal_lock = threading.Lock()
+AXES = ("room", "robot")
+AXES_FILE = os.path.join(os.environ.get("UR_STATE_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state"),
+                         "surfaces_axes.json")
+
+
+def axes():
+    """room | robot: the axes the table boxes' edges follow (state/surfaces_axes.json, default room)"""
+    try:
+        with open(AXES_FILE) as f:
+            a = json.load(f).get("axes")
+    except (OSError, ValueError, AttributeError):
+        a = None
+    return a if a in AXES else "room"
+
+
+def _yaw(ax):
+    """the boxes' turn about z in base_link, rad: the room's axes are base_link's turned by minus robot.room_yaw_deg"""
+    return -C.cell.room_yaw_rad if ax == "room" else 0.0
+
+
+def _box(name, cx, cy, z, size, meta):
+    """the scene object of a table: top at z, centred on cx, cy, footprint size [x, y] along the current axes"""
+    cfg = _cfg(name)
+    ax = axes()
+    yaw = _yaw(ax)
+    t = float(cfg.get("thickness_m", 0.05))
+    meta = dict(meta, surface=name, top_z_m=round(z, 5), center_xy_m=[round(cx, 5), round(cy, 5)],
+                size_m=[float(size[0]), float(size[1])], axes=ax, yaw_deg=round(math.degrees(yaw), 3))
+    return {"id": _oid(name), "frame_id": C.cell.base_frame,
+            "pose": {"position": [cx, cy, z - t / 2], "orientation": [0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2)]},
+            "shapes": [{"type": "box", "size": [float(size[0]), float(size[1]), t],
+                        "pose": {"position": [0.0, 0.0, 0.0], "orientation": [0.0, 0.0, 0.0, 1.0]}}],
+            "color": cfg.get("color", [0.45, 0.55, 0.65, 0.5]), "meta": meta}
+
+
+def _rebuild(name):
+    """the measured box again with the current axes and cell.yaml footprint; -> True when it changed. Not while it is calibrated"""
+    o = _current(name)
+    m = (o or {}).get("meta") or {}
+    with _cal_lock:
+        busy = name in _calibrating
+    if busy or "top_z_m" not in m or "center_xy_m" not in m:
+        return False
+    size = [float(v) for v in _cfg(name)["size_m"]]
+    want_yaw = round(math.degrees(_yaw(axes())), 3)
+    if m.get("yaw_deg", 0.0) == want_yaw and m.get("size_m") == size and m.get("axes", "robot") == axes():
+        return False
+    cx, cy = m["center_xy_m"]
+    _put_object(name, _box(name, cx, cy, m["top_z_m"], size, m))
+    return True
+
+
+def reconcile():
+    """(API start, axes change) every measured table rebuilt where its turn or footprint is not the current one -> the names rebuilt"""
+    return [n for n in sorted(C.cell.cfg.get("surfaces") or {}) if _rebuild(n)]
 
 
 def _cfg(name):
@@ -94,12 +158,17 @@ def _state(name):
     if o:
         m = o.get("meta") or {}
         out.update(top_z_m=m.get("top_z_m"), center_xy_m=m.get("center_xy_m"), size_m=m.get("size_m"),
-                   measured_at=m.get("measured_at"), n_points=m.get("n_points"), z_spread_m=m.get("z_spread_m"))
+                   measured_at=m.get("measured_at"), n_points=m.get("n_points"), z_spread_m=m.get("z_spread_m"),
+                   axes=m.get("axes", "robot"), yaw_deg=m.get("yaw_deg", 0.0))
     return out
 
 
 def _covers(m, xy):
-    return all(abs(xy[i] - m["center_xy_m"][i]) <= m["size_m"][i] / 2 for i in (0, 1))
+    """xy inside the box's footprint (turned by its yaw_deg)"""
+    a = -math.radians(m.get("yaw_deg", 0.0))
+    dx, dy = xy[0] - m["center_xy_m"][0], xy[1] - m["center_xy_m"][1]
+    local = (math.cos(a) * dx - math.sin(a) * dy, math.sin(a) * dx + math.cos(a) * dy)
+    return all(abs(local[i]) <= m["size_m"][i] / 2 for i in (0, 1))
 
 
 def _overlaps(name, m):
@@ -123,7 +192,27 @@ def _overlaps(name, m):
 def surfaces_list():
     """Each configured surface: status (set | calibrating | not_set), top_z_m, center_xy_m, size_m, measured_at."""
     return jsonify({"surfaces": [_state(n) for n in sorted(C.cell.cfg.get("surfaces") or {})],
-                    "frame_id": C.cell.base_frame}), 200
+                    "frame_id": C.cell.base_frame, "axes": axes()}), 200
+
+
+@bp.route("/cell/surfaces/axes", methods=["GET", "PUT", "POST"])
+def surfaces_axes():
+    """GET: {axes, room_yaw_deg}. PUT {axes: room | robot}: the table boxes' edges along those axes from now on; the
+    measured boxes are rebuilt at once (same heights and centres, no new measurement). -> + rebuilt, surfaces"""
+    if request.method != "GET":
+        a = _body().get("axes")
+        if a not in AXES:
+            raise err(400, "bad_request", "axes is room or robot", "axes")
+        os.makedirs(os.path.dirname(AXES_FILE), exist_ok=True)
+        tmp = AXES_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"axes": a, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, f)
+        os.replace(tmp, AXES_FILE)
+        rebuilt = reconcile()
+    else:
+        rebuilt = []
+    return jsonify({"axes": axes(), "room_yaw_deg": math.degrees(C.cell.room_yaw_rad), "rebuilt": rebuilt,
+                    "surfaces": [_state(n) for n in sorted(C.cell.cfg.get("surfaces") or {})]}), 200
 
 
 @bp.route("/cell/surfaces/<name>/calibrate", methods=["POST"])
@@ -180,20 +269,13 @@ def surface_set(name):
         cx, cy = (float(v) for v in cfg["center_xy_m"])
     else:
         cx, cy = (sum(p[i] for p in pts) / len(pts) for i in (0, 1))
-    t = float(cfg.get("thickness_m", 0.05))
     warnings = []
     spread = zs[-1] - zs[0]
     if spread > 0.01:
         warnings.append(f"the points' heights spread over {spread * 1000:.0f} mm: the table is uneven or tilted, or "
                         "some points are not on the table top; the median is used")
-    obj = {"id": _oid(name), "frame_id": C.cell.base_frame,
-           "pose": {"position": [cx, cy, z - t / 2], "orientation": [0.0, 0.0, 0.0, 1.0]},
-           "shapes": [{"type": "box", "size": [float(size[0]), float(size[1]), t],
-                       "pose": {"position": [0.0, 0.0, 0.0], "orientation": [0.0, 0.0, 0.0, 1.0]}}],
-           "color": cfg.get("color", [0.45, 0.55, 0.65, 0.5]),
-           "meta": {"surface": name, "top_z_m": round(z, 5), "center_xy_m": [round(cx, 5), round(cy, 5)],
-                    "size_m": [float(size[0]), float(size[1])], "n_points": len(pts), "z_spread_m": round(spread, 5),
-                    "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}}
+    obj = _box(name, cx, cy, z, size, {"n_points": len(pts), "z_spread_m": round(spread, 5),
+                                       "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     warnings += _overlaps(name, obj["meta"])
     _put_object(name, obj)
     with _cal_lock:

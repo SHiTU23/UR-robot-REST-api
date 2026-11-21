@@ -119,12 +119,12 @@ world_boxes: []
 surfaces:
   pick:
     description: the table next to the robot with the bin of pipes
-    size_m: [0.8, 0.8]
+    size_m: [0.4, 0.4]               # (2026-11-21, the operator) half of 0.8 x 0.8 per side; edges along the chosen axes (/cell/surfaces/axes)
     thickness_m: 0.05
     z_range_m: [-1.2, 0.5]           # a measured top outside this is refused as a bad measurement
   place:
     description: the table the robot stands on, where the pipes are put down
-    size_m: [1.0, 1.0]
+    size_m: [0.5, 0.5]               # (2026-11-21, the operator) half of 1.0 x 1.0 per side; edges along the chosen axes (/cell/surfaces/axes)
     thickness_m: 0.05
     z_range_m: [-0.3, 0.3]
     allowed_links: [base_link_inertia]   # the robot's base stands on this table: it may touch the box

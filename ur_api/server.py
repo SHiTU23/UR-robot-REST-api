@@ -283,6 +283,8 @@ def build():
         log.error("built-in world geometry (%s) NOT confirmed in the planning scene!", cell.builtin_world)
     log.info("legacy scene restored: %s", C.legacy.restore())
     log.info("scene v2 restored: %s", C.core.load_and_restore())
+    import routes_surfaces                       # (2026-11-21) the tables turned to the chosen axes, cell.yaml footprints
+    log.info("tables rebuilt (axes %s): %s", routes_surfaces.axes(), routes_surfaces.reconcile())
     C.core.send_colors()
     C.core.start_color_keeper()
     log.info("ready: %s, planning frame %s, tcp %s, gripper %s, camera %s%s", cell.ur_type, cell.planning_frame,
