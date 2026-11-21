@@ -1,6 +1,6 @@
 #!/bin/bash
-# RViz, with the robot turned to match how it stands in the room (robot.room_yaw_deg in config/cell.yaml).
+# RViz, drawn along the axes chosen on the web page (room | robot, state/surfaces_axes.json): view_frame_publisher.py
+# turns the "room" frame by robot.room_yaw_deg (config/cell.yaml) for "room", not at all for "robot", and follows a change.
 # Display only: the "room" frame exists for RViz alone, so the driver, MoveIt and the API do not see it.
-YAW=$(python3 -c 'import math, os, yaml; print(math.radians(yaml.safe_load(open(os.environ.get("UR_CELL_CONFIG") or "/app/config/cell.yaml"))["robot"].get("room_yaw_deg", 0)))')
-ros2 run tf2_ros static_transform_publisher --yaw "$YAW" --frame-id room --child-frame-id world &
+python3 /app/ros/scripts/view_frame_publisher.py &
 exec ros2 run rviz2 rviz2 -d /app/ros/rviz/cell.rviz
