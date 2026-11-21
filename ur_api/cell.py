@@ -43,7 +43,7 @@ class Cell:
         self.tcp_link = p + "tcp"
         self.flange_link = p + "tool0"
         self.hand_link = p + gm["hand_link"]
-        self.hand_links = [p + n for n in gm["links"]] + [p + "tcp"]
+        self.hand_links = [p + n for n in gm["links"]] + [p + "tcp"] + [p + "gripper_collider_" + b["name"] for b in gm.get("collider_boxes") or []]
         self.wrench_topic = "/force_torque_sensor_broadcaster/wrench"
         self.wrench_frame = p + "tool0"
         self.config_home_q = [float(v) for v in r["home_joints_rad"]]

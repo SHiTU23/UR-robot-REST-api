@@ -19,6 +19,10 @@ mount_offset_m: -0.0428
 # fingers assumed along TCP x came out turned). pipeFit's ur_pick has the same as closing_in_tcp_deg 45 (= 81 - 36).
 mount_yaw_rad: 1.413717
 max_width_m: 0.085                      # datasheet stroke 85 mm (the model: 85.0 mm, see the table)
+# (2026-11-21) the widest opening the cell ever commands (pipeFit tools/ui/ur_pick.py GRIPPERS['robotiq_2f85']['open_max_m']). The fingers in RViz and in MoveIt's
+# collision checks start at this width and never go wider: the old start at max_width_m (full stroke) made the
+# gripper collider wider than the gripper ever is.
+allowed_max_width_m: 0.085
 min_force_n: 20.0                       # datasheet grip force 20-235 N
 max_force_n: 235.0
 default_force_n: 40.0

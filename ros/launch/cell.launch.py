@@ -89,7 +89,7 @@ def _nodes(context):
                           "use_mock_hardware": lc("use_mock_hardware")}.items())
     fingers = Node(executable=sys.executable, arguments=[os.path.join(HERE, "..", "scripts", "finger_state_publisher.py")],
                    name="finger_state_publisher", output="screen",
-                   parameters=[{"joint": GM["joint"], "max_width_m": float(GM["max_width_m"]),
+                   parameters=[{"joint": GM["joint"], "max_width_m": float(GM.get("allowed_max_width_m", GM["max_width_m"])),   # (2026-11-21) the cell's limit, not the stroke
                                 "table_joint": [float(r[0]) for r in GM["table"]],
                                 "table_width": [float(r[1]) for r in GM["table"]]}])
     return [driver, moveit, fingers]

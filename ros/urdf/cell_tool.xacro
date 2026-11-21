@@ -33,7 +33,16 @@
     <!-- off-axis TCP (the gripper shifts with it): from the controller, else the model's calibrated value -->
     <xacro:property name="txy" value="${ptcp[0:2] if ptcp else gm.get('tcp_xy_m', [0.0, 0.0])}"/>
     <xacro:property name="trpy" value="${ptcp[3:6] if ptcp else [0.0, 0.0, 0.0]}"/>
-    <xacro:property name="yaw" value="${(0.0 if gm['closing_axis_in_mount'] == t['finger_axis'] else pi / 2) + gm.get('mount_yaw_rad', 0.0)}"/>
+    <!-- (2026-11-21, the operator's ground truth) the gripper is mounted PARALLEL TO THE CAMERA: with closing_along_camera_x the
+         fingers close along the camera's x (its long side), the direction of the hand-eye camera mount (camera_mount when saved,
+         else cell.yaml camera_rpy_rad), seen along tool0 z; mount_yaw_rad is then an extra turn on top. The camera is placed by the
+         calibration and matches the cell; the gripper had a hand-set turn (-0.508, then 0) that did not. Not the pendant TCP x:
+         that one is turned against the camera on the real robot -->
+    <xacro:property name="pcm0" value="${[float(v) for v in str(camera_mount).split()]}"/>
+    <xacro:property name="crpy0" value="${pcm0[3:6] if pcm0 else t['camera_rpy_rad']}"/>
+    <xacro:property name="cam_yaw" value="${atan2(sin(crpy0[2]) * cos(crpy0[1]), cos(crpy0[2]) * cos(crpy0[1]))}"/>
+    <xacro:property name="yaw" value="${(0.0 if gm['closing_axis_in_mount'] == t['finger_axis'] else pi / 2)
+                                         + (cam_yaw if gm.get('closing_along_camera_x', False) else 0.0) + gm.get('mount_yaw_rad', 0.0)}"/>
 
     <!-- flange plate + tool changer -->
     <link name="${tf_prefix}tool_changer">
@@ -61,6 +70,28 @@
       <xacro:include filename="grippers/robotiq_2f85.xacro"/>
       <xacro:gripper_robotiq_2f85 tf_prefix="${tf_prefix}" parent="tool0" z="${L + gm['mount_offset_m']}" yaw="${yaw}"/>
     </xacro:if>
+
+    <!-- (2026-11-21) box colliders of the gripper (gm collider_boxes): one link gripper_collider_<name> per box, fixed to the
+         box's link (default the hand link), collision only, so the gripper's own mesh stays what you see. Boxes on the
+         moving finger links open and close with the width of every check. RViz draws them as boxes (routes_viz) -->
+    <xacro:macro name="collider_links" params="boxes">
+      <xacro:if value="${len(boxes) > 0}">
+        <xacro:property name="cb0" value="${boxes[0]}"/>
+        <link name="${tf_prefix}gripper_collider_${cb0['name']}">
+          <collision>
+            <xacro:property name="cr0" value="${cb0.get('rpy', [0.0, 0.0, 0.0])}"/>
+            <origin xyz="${cb0['center'][0]} ${cb0['center'][1]} ${cb0['center'][2]}" rpy="${cr0[0]} ${cr0[1]} ${cr0[2]}"/>
+            <geometry><box size="${cb0['size'][0]} ${cb0['size'][1]} ${cb0['size'][2]}"/></geometry>
+          </collision>
+        </link>
+        <joint name="${tf_prefix}gripper_collider_${cb0['name']}_joint" type="fixed">
+          <parent link="${tf_prefix}${cb0.get('link', gm['hand_link'])}"/>
+          <child link="${tf_prefix}gripper_collider_${cb0['name']}"/>
+        </joint>
+        <xacro:collider_links boxes="${boxes[1:]}"/>
+      </xacro:if>
+    </xacro:macro>
+    <xacro:collider_links boxes="${gm.get('collider_boxes', [])}"/>
 
     <!-- TCP: fingertip centre with the gripper closed -->
     <link name="${tf_prefix}tcp"/>

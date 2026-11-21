@@ -4,8 +4,9 @@ complete robot state: the gripper is not a ros2_control device. The other finger
 
 The width comes from /gripper/width (std_msgs/Float64, metres, transient local), which the REST API publishes
 after every gripper action, and becomes a joint value through the model's table (config/grippers/<model>.yaml:
-rows [joint, width, tip depth], computed from the model). Until the first message the fingers are shown fully
-open (initial_width_m): the widest envelope, i.e. the cautious choice for collision checks near walls."""
+rows [joint, width, tip depth], computed from the model). Until the first message the fingers are shown open
+at max_width_m, which cell.launch.py sets to the gripper's allowed_max_width_m (2026-11-21: the widest opening the cell
+commands, RG6 100 mm, not the 160 mm stroke): the widest real envelope. Wider readings are clamped to it."""
 import numpy as np
 import rclpy
 from rclpy.node import Node
