@@ -56,9 +56,10 @@ tool:
   bracket_rpy_rad: [0.0, 0.0, -0.50800]
   # (2026-11-20) The camera mount plate (~/Downloads/RealsenseMount.stl, mm): a ring clamped on the flange (r 35.75)
   # and an arm out to the camera, whose back is screwed to the arm's end (2 x M3, 44.8 mm apart, midpoint 100.35 mm
-  # from the flange axis). Plate frame: origin the flange centre, z = tool0 z, y towards the camera, x along the
+  # from the flange axis). Plate frame: origin on the flange axis, z = tool0 z, y towards the camera, x along the
   # screw holes = minus the image x (how the camera sits on it). With a saved camera_mount the bracket box is the
-  # plate's arm, turned so (ur_api/camera_mount.py bracket); its ring lies inside the tool changer's cylinder.
+  # plate's arm, turned so, lying on the camera's back face (2026-11-21: its height from the hand-eye too, it was drawn
+  # on the flange face ~60 mm above the camera; ur_api/camera_mount.py bracket).
   camera_mount_plate:
     arm_x_m: [-0.0295, 0.0295]
     arm_y_m: [0.0300, 0.1073]

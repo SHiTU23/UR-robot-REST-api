@@ -99,9 +99,12 @@ def load(path):
 
 def bracket(xyz, rpy, tool):
     """(size [3], xyz [3], rpy [3]) of the bracket box in tool0. With tool.camera_mount_plate (the mount's real shape): its
-    arm, turned about tool0 z so the plate's x runs along minus the image x (the camera's screw holes). Else a bar from
-    the changer's surface out to the camera body's centre, at the body's height (bracket_size_m: width, thickness)."""
+    arm, turned about tool0 z so the plate's x runs along minus the image x (the camera's screw holes), lying on the
+    camera body's back face. Else a bar from the changer's surface out to the camera body's centre, at the body's height
+    (bracket_size_m: width, thickness)."""
     R = rpy_to_R(rpy)
+    cc = tool.get("camera_box_center_m") or [0.0, 0.0, 0.0]
+    b = [xyz[i] + sum(R[i][k] * cc[k] for k in range(3)) for i in range(3)]       # the body's centre in tool0
     pl = tool.get("camera_mount_plate")
     if pl:
         ax, ay = -R[0][0], -R[1][0]                     # minus the image x, flattened onto the flange plane
@@ -109,9 +112,12 @@ def bracket(xyz, rpy, tool):
         (x0, x1), (y0, y1), th = pl["arm_x_m"], pl["arm_y_m"], float(pl["thickness_m"])
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         c, s = math.cos(yaw), math.sin(yaw)
-        return [x1 - x0, y1 - y0, th], [c * cx - s * cy, s * cx + c * cy, th / 2], [0.0, 0.0, yaw]
-    cc = tool.get("camera_box_center_m") or [0.0, 0.0, 0.0]
-    b = [xyz[i] + sum(R[i][k] * cc[k] for k in range(3)) for i in range(3)]       # the body's centre in tool0
+        # (2026-11-21, the operator) the plate sits right on top of the camera, not on the flange face (it was at z = th/2, ~60 mm above
+        # the camera in RViz): its height comes from the hand-eye too. The camera's back face = the body centre minus half its depth along
+        # the optical axis (camera z); the plate's centre half its thickness further up (towards the flange)
+        depth = float((tool.get("camera_box_m") or [0.0, 0.0, 0.0])[2])
+        z_back = b[2] - R[2][2] * depth / 2
+        return [x1 - x0, y1 - y0, th], [c * cx - s * cy, s * cx + c * cy, z_back - th / 2], [0.0, 0.0, yaw]
     r1 = math.hypot(b[0], b[1])
     r0 = float(tool.get("changer_radius_m", 0.0375))
     bs = tool.get("bracket_size_m") or [0.045, 0.110, 0.030]

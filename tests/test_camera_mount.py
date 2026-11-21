@@ -48,6 +48,18 @@ class TestCameraMount(unittest.TestCase):
         self.assertLess(math.hypot(hx - T[0][3], hy - T[1][3]), 0.017)
         self.assertEqual([round(v, 6) for v in size], [0.059, 0.0773, 0.0046])
 
+    def test_plate_lies_on_the_camera_back(self):
+        """(2026-11-21) the plate is right on top of the camera body (it was on the flange face, ~60 mm above it)"""
+        tool = dict(TOOL, camera_box_m=[0.092, 0.027, 0.032], camera_box_center_m=[0.0157, -0.0029, -0.0123],
+                    camera_mount_plate={"arm_x_m": [-0.0295, 0.0295], "arm_y_m": [0.0300, 0.1073], "thickness_m": 0.0046})
+        xyz, rpy = [-0.057499, -0.106006, 0.09273], [0.001115, 0.002597, -0.399642]      # the hand-eye of 2026-11-21
+        size, bx, _ = cm.bracket(xyz, rpy, tool)
+        R = cm.rpy_to_R(rpy)
+        body_z = xyz[2] + sum(R[2][k] * tool["camera_box_center_m"][k] for k in range(3))
+        back = body_z - R[2][2] * 0.032 / 2
+        self.assertAlmostEqual(bx[2] + size[2] / 2, back, delta=1e-6)       # the plate's underside on the camera's back face
+        self.assertAlmostEqual(back, 0.0644, delta=0.0005)
+
     def test_save_load_arg(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "calibration", "camera_mount.yaml")
