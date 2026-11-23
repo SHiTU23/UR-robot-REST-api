@@ -34,6 +34,15 @@ class _Camera:
         self.align = True             # True: depth resampled onto the colour image; False: depth at its own resolution
         self._depth_intr = None       # depth-stream intrinsics, needed when not aligned
         self.exposure_wanted = {}     # {"auto", "exposure", "gain"} to re-apply whenever the stream starts
+        self.exposure_default = {"auto": True}    # (2026-11-20) what reset_exposure goes back to: config/cell.yaml's, else auto
+
+    def reset_exposure(self):
+        """(2026-11-20) undo the exposure / gain changes made through the API or the panel: back to config/cell.yaml's
+        camera.auto_exposure / exposure / gain, or to auto exposure when it sets none. -> the state read back."""
+        d = self.exposure_default
+        if d.get("auto", "exposure" not in d and "gain" not in d):
+            return self.set_exposure(auto=True)
+        return self.set_exposure(False, d.get("exposure"), d.get("gain"))
 
     # backend hooks: _open() -> starts the device, sets _serial/_intr/_depth_res; _grab() -> (bgr, depth_mm) | None;
     # _close()
@@ -438,4 +447,5 @@ def make_camera(cfg):
     cam.align = bool(cfg.get("align_depth", True))
     wanted = {k: cfg[c] for k, c in (("auto", "auto_exposure"), ("exposure", "exposure"), ("gain", "gain")) if cfg.get(c) is not None}
     cam.exposure_wanted = wanted
+    cam.exposure_default = dict(wanted) or {"auto": True}
     return cam

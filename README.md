@@ -73,14 +73,21 @@ open http://localhost:5000/ui                                    # browser panel
 
 ## Grippers
 
-One line picks the gripper: `gripper.model` in `config/cell.yaml`, or `UR_GRIPPER=<model>` in front of any
-`run.sh` command. The robot model (URDF), MoveIt's collision exclusions (SRDF), the finger display, the TCP and
+Three ways pick the gripper, the first that is set wins:
+1. `UR_GRIPPER=<model>` in front of any `run.sh` command (the web page then cannot switch it).
+2. **The web page** (`/ui`, Gripper card, *model* + *Switch*), or `POST /gripper/model {"model": "robotiq_2f85"}`:
+   saved in `state/gripper_model`, then the API and the ROS side restart with it (about 30-60 s, the arm does
+   not move; refused with 409 while anything runs). `GET /gripper/models` lists the models and the one in use.
+   The ROS side follows through `ros/scripts/cell.sh`, which exits when the choice changes so Docker restarts it.
+3. `gripper.model` in `config/cell.yaml`.
+
+Switch only when that gripper is really on the flange. The robot model (URDF), MoveIt's collision exclusions (SRDF), the finger display, the TCP and
 the API's limits all follow it. The tool changer, camera and bracket stay the same.
 
 | model | from | on the real arm | width | force | TCP (flange → closed fingertips) |
 |---|---|---|---|---|---|
 | `rg6` | MIT meshes from [BrettRD/onrobot_grippers](https://github.com/BrettRD/onrobot_grippers) | pendant programs (below) | 0–160 mm | 25–120 N | 0.322 m, **measured** |
-| `robotiq_2f85` | official `ros-jazzy-robotiq-description`, on Robotiq's UR adapter | **not yet**: gripper endpoints answer 501 (mock: simulated) | 0–85 mm | 20–235 N | 0.235 m, **derived** (same flange + changer, adapter + model) |
+| `robotiq_2f85` | official `ros-jazzy-robotiq-description`, on Robotiq's UR adapter | pendant program `aikido.urp` (below; was `uw_wara.urp`), **not yet tried on the arm** | 0–85 mm | 20–235 N | 0.235 m, **derived** (same flange + changer, adapter + model) |
 
 - Both grippers close their fingers on a linkage, so the finger joint is an angle, not half the width.
   `config/grippers/<model>.yaml` holds the table between joint angle, width and fingertip depth. It is
@@ -113,6 +120,27 @@ Before the first run on the **real arm**:
    know the real finger width, add `write_output_float_register(N, <the URCap's width variable>)` at the end of
    the program and set `gripper.width_feedback_register: N`. Without that, the API reports the commanded
    width with `width_measured: false`, and a grasp counts as successful once the program finishes.
+   **Robotiq 2F-85 instead:** start with `UR_GRIPPER=robotiq_2f85` (or `gripper.model: robotiq_2f85`). Its block
+   `gripper.robotiq_2f85` in `config/cell.yaml` replaces only the program names; the RG6 settings stay untouched.
+   On the pendant (Robotiq URCap installed, gripper set up in the Installation tab) make `aikido.urp` with
+   one Script node (check the exact `rq_*` names in the Script node's function list for your URCap version):
+   ```
+   write_output_float_register(19, -1)                                   # object detection: unknown until the move ends
+   rq_activate_and_wait()
+   rq_set_force_norm((read_input_float_register(19) - 20) / 215 * 100)   # N -> % (2F-85: 20-235 N)
+   rq_set_speed_norm(50)
+   rq_move_and_wait_mm(read_input_float_register(18))                   # mm; needs the URCap's mm calibration
+   write_output_float_register(18, rq_current_pos_mm())
+   if rq_is_object_detected():                                         # the fingers stopped on something (force), not at the target
+     write_output_float_register(19, 1)
+   else:
+     write_output_float_register(19, 0)
+   end
+   ```
+   With the two register-19 parts in the program, uncomment `object_feedback_register: 19` in the Robotiq block: every gripper
+   reply then has `object_detected` true / false (null without it, and always for the RG6).
+   The first activation sweeps the fingers fully. The TCP (0.235 m) is derived from the model, not measured:
+   measure it and set it (pendant + `/robot/tcp`) before grasping; set the payload on the pendant too.
 3. **Network:** the robot must reach this PC, because the driver uses reverse connections on ports
    50001–50004. Set `robot.ip` in `config/cell.yaml`, or pass `UR_ROBOT_IP`.
 4. **Measure the `MEASURE` values in `config/cell.yaml`:** the tool changer, camera bracket, and **the table
@@ -170,8 +198,9 @@ rejects leaves the previous settings in place. Changes last until the server res
 /camera/exposure                      # read: auto, exposure, gain and their ranges
 /camera/exposure?exposure=200&gain=20 # by hand (turns auto off)
 /camera/exposure?auto=1               # the camera decides
+/camera/exposure?reset=1              # undo the changes: cell.yaml's values, or auto when it sets none
 ```
-Colour stream only, in the camera's own units. The panel has the same controls. It lasts until the server restarts; to
+Colour stream only, in the camera's own units. The panel has the same controls, and "Reset to default" for reset=1. It lasts until the server restarts; to
 keep it, set `camera.auto_exposure`, `exposure` and `gain` in `config/cell.yaml`.
 
 ## RViz view
@@ -182,6 +211,18 @@ counter-clockwise from above). Then `./run.sh rviz`.
 The same angle gives the room's axes: `frame=room` on `plan_cartesian_path`, `plan_joint_path` and `rotate_tcp`, and the
 panel's jog and rotate buttons (default). `/state` reports the TCP in them under `room`. Coordinates without `frame=room`
 are along the robot's own axes, and saved poses are unaffected. Angle set wrong, `+y` goes the wrong way.
+
+## Arm calibration
+
+Every UR arm has its own factory calibration. `config/calibration/ur_calibration.yaml` holds this arm's, and the driver and
+model use it (`robot.kinematics_params_file` in `config/cell.yaml`).
+```
+curl http://<pc>:5000/robot/calibration                 # values, hash, whether it is in use and matches the arm
+curl http://<pc>:5000/robot/calibration?format=yaml     # the file itself
+./run.sh save-calibration                               # read it from the arm again, then restart the stack
+```
+`tools/save_calibration.py` does the job of `ur_calibration`'s `calibration_correction`, because the released package (3.9.0)
+never connects. Read it again if the arm or controller is replaced.
 
 ## Home pose
 
@@ -205,8 +246,23 @@ kept in `state/home.json` and refused if the arm is moving, near a joint limit o
 | `stopped_user_button` | user-stop button | UR **emergency or safeguard stop** |
 | `/recover` | Franka error recovery | unlocks a protective stop (refused by the controller in its first 5 s), closes popups, resends the driver's program. It does **not** power on or release the brakes: a powered-off arm is reported, not restarted |
 | `/control/home` | fixed Panda pose | `robot.home_joints_rad` (the recorded eye-in-hand home) |
-| extras | | `velocity=` on `plan_cartesian_path`; `/joints` has `gripper_width_measured`; `/health` adds robot mode, safety mode, driver program, dashboard |
+| extras | | `velocity=` and `acceleration=` on every motion (see *Speed* below); `/joints` has `gripper_width_measured`; `/health` adds robot mode, safety mode, driver program, dashboard |
 | camera | RealSense D435 | `camera.backend`: Orbbec Gemini 2 (this arm's camera), RealSense or none. Same endpoints, depth always uint16 mm aligned to colour |
+
+## Speed: velocity and acceleration
+
+Every motion endpoint takes `velocity=` and `acceleration=` (query, or the JSON body of `POST /control/goto_joints`): MoveIt's
+scaling factors, 0.01–0.5 of the joint speed and acceleration limits (400 outside). Short moves are limited by the acceleration,
+so raising `velocity` alone barely shortens them; raise both. Each reply echoes the two values used.
+
+| endpoint | `velocity` default | `acceleration` default |
+|---|---|---|
+| `/control/goto_joints`, `/control/goto_pose` | 0.2 | 0.1 |
+| `/control/plan_cartesian_path`, `/control/rotate_tcp` | 0.05 | the velocity's value |
+| `/control/plan_joint_path` | 0.3 | 0.05 |
+| `/control/home` | 0.3 | 0.1 |
+
+`/control/resume` repeats the last motion with its values. `/control/nudge_joint` (recovery) stays at 0.15 / 0.05.
 
 ## Verified so far (2026-10-26)
 
@@ -248,11 +304,79 @@ kept in `state/home.json` and refused if the arm is moving, near a joint limit o
 - **The Franka README's hash snippet** builds `dims` eagerly (`{"box": s["size"], "sphere": [s["radius"]], ...}`),
   which raises `KeyError` for every shape. `tests/test_scene_hash.py` uses the same values evaluated lazily.
 
+## TCP
+
+The `tcp` link (the fingertip centre the API plans to and reports in `/state`) is built at start from the saved TCP in
+`config/calibration/tcp_<gripper model>.yaml` (`robot.tcp_file`, one per gripper). The controller's TCP is not used for motion: the API sends joint
+trajectories planned to the `tcp` link.
+
+```bash
+curl localhost:5000/robot/tcp                         # in use, saved, restart_required
+curl "localhost:5000/robot/tcp?controller=1"          # + the controller's active TCP (read-only)
+curl -X PUT -H 'Content-Type: application/json' localhost:5000/robot/tcp \
+     -d '{"xyz_m":[0,0,0.322],"rotvec_rad":[0,0,0],"note":"pendant hand_eye_TCP"}'   # metres; rpy_rad also accepted
+curl -X POST localhost:5000/robot/tcp/from_controller # save the controller's active TCP instead
+./run.sh restart                                      # the new TCP takes effect (restart_required -> false)
+```
+
+- `robot.tcp_mode: file` (default): the saved TCP wins. At start the controller is read only to compare (a NOTE in
+  `./run.sh logs` when it differs), or to create the file if there is none. `controller`: re-read at every start.
+- `follow` (the Robotiq's block, `gripper.robotiq_2f85.tcp_mode`, since 2026-11-20): like `controller`, and while
+  running the API reads the controller's active TCP every 5 s (read-only). When it changes (e.g. TCP_1 edited on the
+  pendant) and is the same on two reads, plausible, and the arm has been idle for 15 s, the API saves it and restarts
+  itself and the ROS side (`state/restart_ros` → `ros/scripts/cell.sh`): about 30–60 s, the arm does not move. At most
+  one restart per 2 min. A gripper's own `tcp_mode` overrides `robot.tcp_mode`.
+- **Don't use `controller` or `follow` mode with the RG6.** Its URCap switches the active TCP to its own (234 mm, turned 180°)
+  whenever an RG6 node runs, so the pendant's Installation screen and the active TCP disagree.
+- PUT refuses z outside 0.02–0.8 m (so millimetres are caught) and x, y more than 0.2 m off the flange axis. It warns
+  when z is more than 5 mm off the gripper model's fingertips, or when the TCP is rotated.
+
+## Wrist camera pose (hand-eye)
+
+The `wrist_camera` link (and the bracket box) is part of the robot description: RViz shows it there, and the
+planning scene checks it against the bin and the tables. Its pose on the flange comes from the client's hand-eye
+calibration, not from hand-typed numbers:
+
+```bash
+curl localhost:5000/robot/camera_mount                # in use (the loaded link), saved, restart_required
+curl -X PUT -H 'Content-Type: application/json' localhost:5000/robot/camera_mount \
+     -d '{"T_tool0_camera": [[...4x4, tool0 -> camera optical frame...]], "apply": true}'
+```
+
+It is saved to `config/calibration/camera_mount.yaml` (`tool.camera_mount_file`). `cell.launch.py` hands it to the
+URDF at every start through env `UR_CAMERA_MOUNT`. With `"apply": true`, the API and the ROS side restart at once
+(202, about 30-60 s; refused while anything runs; the arm does not move). If the mount is unchanged (within 1 mm and
+0.2 deg), nothing restarts. With the file present, the bracket becomes a bar from the tool changer out to the camera
+body (width and thickness from `bracket_size_m`). Without the file, `tool.camera_xyz_m` / `camera_rpy_rad` /
+`bracket_*` of `config/cell.yaml` are used, as before. pipeFit sends its accepted calibration automatically
+(`ur_calib.send_camera_mount`).
+
+## Tables (pick and place heights)
+
+The pick table (bin of pipes, next to the robot) and the place table (the one the robot stands on) are collision
+boxes whose height comes from the client's calibration, so either can change height without a restart. Footprints
+are in `config/cell.yaml`, section `surfaces`.
+
+1. `POST /cell/surfaces/pick/calibrate`: the pick table's box leaves the collision scene, so the calibration poses
+   down at the new height are not blocked. **Until step 2 nothing stops the arm at that table.**
+2. Measure the table top with the camera depth, then `PUT /cell/surfaces/pick` with
+   `{"points": [[x, y, z], ...], "frame_id": "base_link"}` (or `"point": [x, y, z]`; `"frame_id": "base"` for the
+   pendant's frame). The box comes back with its top at the median z, centred on the mean x, y. Heights outside
+   `z_range_m` are refused; points more than 10 mm apart in height, or the arm touching the new box, give warnings.
+3. `POST /cell/surfaces/pick/cancel` instead puts the previous box back.
+
+The same for `place`; the robot's base may touch the place box (`allowed_links`). `GET /cell/surfaces` shows both.
+The boxes live in the scene namespace `cell.surfaces`, persist across restarts and show in RViz. The bin is not a
+surface: send it with `/scene/batch` in the client's own namespace once its position is calibrated.
+
 ## Safety
 
 - **Access:** currently open, with no token; see [Access](#access).
-- **Collision model:** the fixed scene is one floor box (`world_boxes` in `config/cell.yaml`); add walls and a
-  ceiling there for this cell. Tool sizes marked `MEASURE` are estimates. The gripper's own links are excluded
+- **Collision model:** the real cell has NO fixed geometry since 2026-11-11 (`world_boxes: []` in
+  `config/cell.yaml`): the floor box under the base blocked picking from a table lower than the robot's own. The
+  tables are the calibrated surfaces (see [Tables](#tables-pick-and-place-heights)); until both are set, the arm can
+  plan into them. URSim
+  (`tests/ursim/cell_ursim.yaml`) keeps its floor. Tool sizes marked `MEASURE` are estimates. The gripper's own links are excluded
   from checks against each other and against the changer, camera and wrist.
 - **Motion guards:** every motion endpoint keeps the Franka rules:
   - targets and paths stay away from joint limits;

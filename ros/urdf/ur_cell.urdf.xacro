@@ -16,6 +16,11 @@
   <xacro:arg name="cell_config" default="$(optenv UR_CELL_CONFIG /app/config/cell.yaml)"/>
   <xacro:arg name="gripper" default="$(optenv UR_GRIPPER)"/>
   <xacro:arg name="grippers_dir" default="/app/config/grippers"/>
+  <!-- the arm's active TCP "x y z roll pitch yaw" (set by cell.launch.py from the controller); empty = the model's -->
+  <xacro:arg name="tcp" default="$(optenv UR_TCP)"/>
+  <!-- (2026-11-20) the wrist camera's hand-eye pose + the bracket derived from it (15 numbers, ur_api/camera_mount.py
+       as_arg; set by cell.launch.py from tool.camera_mount_file); empty = config/cell.yaml tool.camera_* / bracket_* -->
+  <xacro:arg name="camera_mount" default="$(optenv UR_CAMERA_MOUNT)"/>
 
   <!-- possible 'ur_type' values: ur3, ur3e, ur5, ur5e, ur7e, ur10, ur10e, ur12e, ur16e, ur8long, ur15, ur18, ur20, ur30 -->
   <!-- the default value should raise an error in case this was called without defining the type -->
@@ -89,7 +94,8 @@
 
   <!-- the cell tool on the flange -->
   <xacro:cell_tool tf_prefix="$(arg tf_prefix)" cell="${xacro.load_yaml('$(arg cell_config)')}"
-                   gripper="$(arg gripper)" grippers_dir="$(arg grippers_dir)"/>
+                   gripper="$(arg gripper)" grippers_dir="$(arg grippers_dir)" tcp="$(arg tcp)"
+                   camera_mount="$(arg camera_mount)"/>
 
   <!-- ros2 control instance -->
   <xacro:ur_ros2_control

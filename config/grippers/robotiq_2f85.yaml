@@ -1,5 +1,5 @@
 # Robotiq 2F-85 on Robotiq's UR adapter plate (ros/urdf/grippers/robotiq_2f85.xacro): links, driving joint,
-# limits, and the width table. Control on the real arm is not implemented yet (mock / simulated gripper only).
+# limits, and the width table. On the real arm it is driven by a pendant program (config/cell.yaml gripper.robotiq_2f85).
 xacro: robotiq_2f85.xacro
 name: Robotiq 2F-85
 joint: robotiq_85_left_knuckle_joint    # 0 = open .. 0.8 = closed; every other finger joint mimics it
@@ -9,9 +9,56 @@ links: [ur_to_robotiq_link, robotiq_85_base_link, robotiq_85_left_knuckle_link, 
         robotiq_85_right_inner_knuckle_link, robotiq_85_left_finger_tip_link, robotiq_85_right_finger_tip_link]
 pad_links: [robotiq_85_left_finger_tip_link, robotiq_85_right_finger_tip_link]
 closing_axis_in_mount: x
-mount_offset_m: 0.0                     # the adapter plate's flange side (the table's tip depth includes its 11 mm)
+# The model put the closed fingertips at 0.2348 m from the flange (61 mm changer + 173.8 mm model), the pendant TCP calibrated
+# for this gripper (2026-11-16) at 0.192 m: the model was 42.8 mm too long and every grasp near the bin floor "collided" with it.
+# This shift puts the model's closed fingertips at the calibrated TCP (as the RG6's -0.0222). The adapter plate's flange side.
+# (2026-11-22, the operator: the Robotiq overlapped the camera holder in z) Was -0.0428, made for that 0.192 m TCP: it pulled the
+# adapter up to z 18.2 mm, inside the 61 mm changer and through the holder. The TCP in use now (the controller's, follow mode) is
+# 0.23435 m, and the unshifted model reaches 0.061 + 0.17383 = 0.23483: the model is the right length, the gripper starts at the
+# changer's end. -0.0005 puts the closed fingertips exactly at that TCP.
+mount_offset_m: -0.0005
+# How far the gripper is turned on the flange, about tool0 z. (2026-11-22, the operator) the Robotiq is mounted PARALLEL TO THE
+# CAMERA, as the RG6 (same camera holder and position): with closing_along_camera_x its fingers close along the camera's x, taken
+# from the hand-eye camera mount (ros/urdf/cell_tool.xacro), and mount_yaw_rad is an extra turn on top (0). Was a hand-set
+# 1.413717 (81 deg, 2026-11-16, derived from a camera image, not measured): 104 deg off the camera's x (-22.9 deg) in RViz.
+closing_along_camera_x: true
+mount_yaw_rad: 0.0
 max_width_m: 0.085                      # datasheet stroke 85 mm (the model: 85.0 mm, see the table)
-min_force_n: 20.0                       # datasheet grip force 20-235 N
+# (2026-11-21) the widest opening the cell ever commands (pipeFit tools/ui/ur_pick.py GRIPPERS['robotiq_2f85']['open_max_m']). The fingers in RViz and in MoveIt's
+# collision checks start at this width and never go wider: the old start at max_width_m (full stroke) made the
+# gripper collider wider than the gripper ever is.
+allowed_max_width_m: 0.085
+# (2026-11-22) Box colliders, as the RG6's (see config/grippers/rg6.yaml): one link gripper_collider_<name> per box, checked by
+# MoveIt, drawn in RViz (routes_viz "Robot colliders") and served by GET /robot/colliders (pipeFit's 3D view). DERIVED from this
+# model's collision meshes by tools/gripper_colliders.py --pads-aligned (robotiq_description's meshes; 0.5 deg search): the body box holds the
+# base and the UR adapter plate (fixed); each finger link has the smallest box turned about its swing axis (link y) and rides
+# on that link, so the boxes open and close with every check's gripper_width_m. The fingertips (pads, kept parallel by the
+# linkage) are aligned with their link: their inner face is the pad (a turned box stood ~18 mm into the gap). The camera and its holder are the RG6's (the
+# operator: same holder and orientation; the hand-eye calibration is always pipeFit's last one).
+collider_boxes:
+  - {name: body, link: robotiq_85_base_link, center: [0.0000, -0.0000, 0.0380], size: [0.0849, 0.0750, 0.1040]}
+  - {name: left_knuckle, link: robotiq_85_left_knuckle_link, center: [0.0152, 0.0002, 0.0012], rpy: [0.0000, 0.0698, 0.0000], size: [0.0449, 0.0166, 0.0196]}
+  - {name: right_knuckle, link: robotiq_85_right_knuckle_link, center: [-0.0152, 0.0002, 0.0011], rpy: [0.0000, 1.5097, 0.0000], size: [0.0196, 0.0166, 0.0450]}
+  - {name: left_finger, link: robotiq_85_left_finger_link, center: [-0.0004, -0.0008, 0.0240], rpy: [0.0000, 0.1222, 0.0000], size: [0.0236, 0.0272, 0.0595]}
+  - {name: right_finger, link: robotiq_85_right_finger_link, center: [0.0004, 0.0000, 0.0240], rpy: [0.0000, 1.4486, 0.0000], size: [0.0595, 0.0272, 0.0236]}
+  - {name: left_inner_knuckle, link: robotiq_85_left_inner_knuckle_link, center: [0.0186, 0.0002, 0.0217], rpy: [0.0000, 0.7069, 0.0000], size: [0.0121, 0.0350, 0.0691]}
+  - {name: right_inner_knuckle, link: robotiq_85_right_inner_knuckle_link, center: [-0.0186, 0.0001, 0.0217], rpy: [0.0000, 0.8639, 0.0000], size: [0.0691, 0.0350, 0.0121]}
+  - {name: left_finger_tip, link: robotiq_85_left_finger_tip_link, center: [-0.0097, -0.0008, 0.0225], rpy: [0.0000, 0.0000, 0.0000], size: [0.0312, 0.0270, 0.0570]}
+  - {name: right_finger_tip, link: robotiq_85_right_finger_tip_link, center: [0.0097, 0.0001, 0.0225], rpy: [0.0000, 0.0000, 0.0000], size: [0.0312, 0.0270, 0.0570]}
+# (2026-11-22, the operator) the ROBOTIQ SET: this gripper + the NEW camera holder (~/Downloads/RealsenseMount.stl) + the camera.
+# Measured on the STL (surface samples, mm): SOLID 11.6 mm (faces z 0 and 11.6), L-shaped: the arm x +-29.55 out to y 107.3, a wing on
+# ONE side x 29.55..66.95, y 91.7..107.3. The ring round the flange axis (r 35.84) has no box: inside the tool changer (r 37.5), already a
+# collider; the arm box starts where it leaves the ring (y = sqrt(35.84^2 - 29.55^2) = 20.3). Plate frame: origin on the flange axis,
+# z = tool0 z, y towards the camera, x = minus the image x, underside on the camera's back (ur_api/camera_mount.py bracket); mirror_x
+# puts the wing on the other side (the STL seen from its other face). NOT RESOLVED: placed so with the RG6 set's hand-eye the camera's
+# footprint lies at y 109..136, just beyond the mount's end (107.3); this set's own hand-eye (camera_mount_robotiq_2f85.yaml) settles it.
+camera_holder:
+  thickness_m: 0.0116
+  mirror_x: false
+  boxes_m:
+    - {name: arm,  x: [-0.02955, 0.02955], y: [0.0203, 0.1073]}
+    - {name: wing, x: [0.02955, 0.06695],  y: [0.0917, 0.1073]}
+min_force_n: 20.0                      # datasheet grip force 20-235 N
 max_force_n: 235.0
 default_force_n: 40.0
 # Computed from the model by tools/gripper_table.py, as for the RG6.

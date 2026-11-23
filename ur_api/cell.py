@@ -7,6 +7,8 @@ import os
 import numpy as np
 import yaml
 
+from gripper_select import selected_gripper
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -24,8 +26,8 @@ class Cell:
         self.arm_joints = [p + n for n in ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                                            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")]
         self.n_joints = len(self.arm_joints)
-        # the gripper model (config/grippers/<model>.yaml), chosen as in the URDF: env UR_GRIPPER, else cell.yaml
-        self.gripper_model = os.environ.get("UR_GRIPPER") or g.get("model", "rg6")
+        # the gripper model (config/grippers/<model>.yaml), chosen as in the URDF (ros/scripts/cell.sh)
+        self.gripper_model, self.gripper_model_source = selected_gripper(g.get("model", "rg6"))
         with open(os.path.join(ROOT, "config", "grippers", self.gripper_model + ".yaml")) as f:
             gm = yaml.safe_load(f)
         self.gripper_spec = gm
@@ -41,13 +43,14 @@ class Cell:
         self.tcp_link = p + "tcp"
         self.flange_link = p + "tool0"
         self.hand_link = p + gm["hand_link"]
-        self.hand_links = [p + n for n in gm["links"]] + [p + "tcp"]
+        self.hand_links = [p + n for n in gm["links"]] + [p + "tcp"] + [p + "gripper_collider_" + b["name"] for b in gm.get("collider_boxes") or []]
         self.wrench_topic = "/force_torque_sensor_broadcaster/wrench"
         self.wrench_frame = p + "tool0"
         self.config_home_q = [float(v) for v in r["home_joints_rad"]]
         self.home_q = list(self.config_home_q)     # replaced by a saved home: load_saved_home, POST /robot/home
         self.home_saved_at = None
         # How the base is turned in the room (seen from above, + counter-clockwise): RViz's view, and frame=room
+        self.calibration_file = r.get("kinematics_params_file")     # the arm's calibration (GET /robot/calibration)
         self.room_yaw_rad = math.radians(float(r.get("room_yaw_deg", 0.0)))
         self.limit_margin = float(r.get("joint_limit_margin_rad", 0.02))
         self.max_travel_rad = math.radians(float(r.get("max_joint_travel_deg", 100)))
@@ -55,9 +58,17 @@ class Cell:
         # TCP = closed fingertip centre: changer + the model's mount offset + closed tip depth (last table row)
         self.tcp_z = float(t["changer_length_m"]) + float(gm["mount_offset_m"]) + float(gm["table"][-1][2])
         self.tcp_xy = [float(v) for v in gm.get("tcp_xy_m", [0.0, 0.0])]   # calibrated offset from the flange axis
+        self.model_tcp_z = self.tcp_z
+        self.tcp_rpy = [0.0, 0.0, 0.0]
+        self.tcp_source = f"config/grippers/{self.gripper_model}.yaml"
+        self.tcp_file = (r.get("tcp_file") or "").replace("{model}", self.gripper_model) or None   # per gripper (ur_tcp.py)
+        import ur_tcp
+        self.tcp_mode = ur_tcp.mode_for(self.cfg, self.gripper_model)    # file | controller | follow
         # the model's limits; cell.yaml's gripper section (control settings) on top
         self.gripper = {k: gm[k] for k in ("max_width_m", "min_force_n", "max_force_n", "default_force_n")}
-        self.gripper.update(g)
+        # blocks named after a model (gripper.robotiq_2f85: {...}) override the shared lines for that model only
+        self.gripper.update({k: v for k, v in g.items() if not isinstance(v, dict)})
+        self.gripper.update(g.get(self.gripper_model) or {})
         self.gripper["model"] = self.gripper_model
         self.gripper["name"] = gm["name"]
         self.max_width = float(self.gripper["max_width_m"])
@@ -71,6 +82,19 @@ class Cell:
         # wrist_3 (tool roll) cheapest, so it takes the yaw and the big joints stay put.
         self.ik_weights = (2.0, 1.5, 2.0, 1.0, 1.0, 0.15)
         self.ik_limit_margin = 0.05
+
+    def use_urdf_tcp(self, T_tool0_tcp):
+        """Take the TCP from the robot description actually loaded: cell.launch.py may have built it from the
+        saved TCP (robot.tcp_file), which may have changed since (PUT /robot/tcp waits for a restart)."""
+        import ur_tcp
+        self.tcp_xy = [float(T_tool0_tcp[0, 3]), float(T_tool0_tcp[1, 3])]
+        self.tcp_z = float(T_tool0_tcp[2, 3])
+        R = T_tool0_tcp[:3, :3]
+        self.tcp_rpy = [math.atan2(R[2, 1], R[2, 2]), math.asin(max(-1.0, min(1.0, -R[2, 0]))), math.atan2(R[1, 0], R[0, 0])]
+        saved = ur_tcp.load(self.tcp_file, self.gripper_model) if self.tcp_file else None
+        if saved and all(abs(a - b) < 1e-6 for a, b in zip(saved["xyz_m"], self.tcp_xy + [self.tcp_z])):
+            self.tcp_source = f"{self.tcp_file} ({ur_tcp.describe(saved)})"
+        return saved
 
     def load_saved_home(self, path):
         """Use the home pose saved with POST /robot/home, if there is a valid one; otherwise the cell.yaml one."""

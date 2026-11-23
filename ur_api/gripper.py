@@ -13,9 +13,11 @@
 
 The gripper's real width is known only if the programs write it into an output register
 (gripper.width_feedback_register in cell.yaml); otherwise the commanded width is reported, marked
-width_measured=false. SimGripper is the same interface without hardware (mock hardware / tests); NoGripper
-answers 501 for a gripper model with no control yet (Robotiq 2F-85 on the real arm).
+width_measured=false. PendantGripper runs the same sequence for another model (Robotiq 2F-85: gripper.type
+pendant in its cell.yaml block). SimGripper is the same interface without hardware (mock hardware / tests);
+NoGripper answers 501 for a gripper model with no control configured.
 """
+import logging
 import os
 import threading
 import time
@@ -23,12 +25,31 @@ import time
 from dashboard import DashboardError
 from rtde_regs import RTDEError
 
+log = logging.getLogger("ur_rest_api")
+
 OUTCOME_STATUS = {"success": 200, "object_missed": 409, "action_timeout": 504, "server_unreachable": 503, "action_failed": 500,
                   "recovery_failed": 500, "stopped": 200, "not_supported": 501}
 
 
 class GripperResult(dict):
     pass
+
+
+WIDTH_FEEDBACK_TOLERANCE_M = 0.0005   # readings down to -0.5 mm count as 0 (noise); below that the reading is wrong
+
+
+def check_width_feedback(measured):
+    """Sanity-check a width read back from the gripper (m): (width or None, warning or None).
+    A negative width is physically impossible, so it is rejected (None: the caller falls back to the commanded
+    width, marked width_measured=false) with a warning saying so."""
+    if measured is None:
+        return None, None
+    if measured < -WIDTH_FEEDBACK_TOLERANCE_M:
+        return None, (f"the gripper reported a width of {measured * 1000:.1f} mm, which is impossible: the reading is "
+                      "ignored and the commanded width shown instead (width_measured=false). Check the fingertip "
+                      "offset in the RG6 settings on the pendant, and that the gripper program writes the measured "
+                      "width to the feedback register after the grip ends")
+    return max(measured, 0.0), None
 
 
 def grasp_verdict(width, target, eps_in, eps_out, min_object_width, width_given):
@@ -122,7 +143,7 @@ class SimGripper(_Base):
 
 
 class NoGripper(_Base):
-    """A gripper model without control on the real arm yet (Robotiq 2F-85): every action answers 501, so a
+    """A gripper model without control configured (no gripper.type pendant for it): every action answers 501, so a
     client never takes a grasp for done. The model still shows the fingers open."""
     backend = "none"
 
@@ -150,6 +171,9 @@ class RG6Gripper(_Base):
         self.timeout_s = float(g.get("program_timeout_s", 10.0))
         self.width_reg, self.force_reg = int(g["width_register"]), int(g["force_register"])
         self.feedback_reg = int(g.get("width_feedback_register", -1))
+        # (2026-11-19) the gripper's own object detection, written by the program after its move (Robotiq: rq_is_object_detected()
+        # as 1 / 0 into output_double_register_N); -1 = not written: object_detected stays null
+        self.object_reg = int(g.get("object_feedback_register", -1))
         from rtde_regs import RegisterWriter
         self._regs = RegisterWriter(cell.robot_ip)
 
@@ -165,6 +189,16 @@ class RG6Gripper(_Base):
             return self._regs.read_doubles([self.feedback_reg])[self.feedback_reg] / 1000.0
         except Exception:      # noqa: BLE001
             return None
+
+    def _read_object(self):
+        """the program's object detection: True / False, None when not configured or not readable"""
+        if self.object_reg < 0:
+            return None
+        try:
+            v = self._regs.read_doubles([self.object_reg])[self.object_reg]
+        except Exception:      # noqa: BLE001
+            return None
+        return None if v < 0 else v >= 0.5          # a negative value: the program wrote "unknown"
 
     # ---- the program run ----
 
@@ -242,8 +276,10 @@ class RG6Gripper(_Base):
                 if time.time() > deadline:
                     self.dash.stop()
                     outcome = "action_timeout"
-                    failed = RuntimeError(f"{program} did not finish within {timeout_s:.0f} s (started={started}); "
-                                          "does it exist on the pendant?")
+                    failed = RuntimeError(
+                        f"{program} was still running after {timeout_s:.0f} s and was stopped: untick 'Program Loops "
+                        "Forever' in its Robot Program node on the pendant (and no Wait / Loop at its end)" if started
+                        else f"{program} did not start within {timeout_s:.0f} s; does it exist on the pendant?")
                     break
                 time.sleep(0.05)
         except (DashboardError, RTDEError, RuntimeError, OSError) as e:
@@ -260,11 +296,17 @@ class RG6Gripper(_Base):
             if failed is None:
                 failed, outcome = RuntimeError(f"could not give control back to the driver: {msg}"), "action_failed"
         self.phase = "reading the width"
-        measured = self._read_feedback()
+        raw = self._read_feedback()
+        measured, warning = check_width_feedback(raw)
+        if warning:
+            log.warning("%s", warning)
+            out["notes"].append(warning)
+            out.update(width_warning=warning, width_feedback_raw_m=raw)
         self.phase = None
         self.holding = False if outcome == "success" and not closing else None
         if outcome == "success":
             self._set_width(measured if measured is not None else w, measured is not None)
+        out["object_detected"] = self._read_object() if outcome == "success" else None
         out.update(outcome=outcome, width_m=self.width, width_measured=self.width_measured,
                    elapsed_s=round(time.time() - t0, 2))
         if failed is not None:
@@ -272,9 +314,18 @@ class RG6Gripper(_Base):
         return out
 
 
+class PendantGripper(RG6Gripper):
+    """Any other gripper driven by the same sequence (registers -> pendant program -> driver back), e.g. the
+    Robotiq 2F-85 through its URCap. Width and force go in as mm and N like the RG6; a program that needs other
+    units (Robotiq: force in %) converts them on the pendant."""
+    backend = "pendant"
+
+
 def make_gripper(cell, ros, dashboard, mock):
     if mock or cell.gripper.get("type") == "sim":
         return SimGripper(cell, ros)
     if cell.gripper_model == "rg6":
         return RG6Gripper(cell, ros, dashboard)
+    if cell.gripper.get("type") == "pendant":          # e.g. robotiq_2f85 with its block in cell.yaml
+        return PendantGripper(cell, ros, dashboard)
     return NoGripper(cell, ros)

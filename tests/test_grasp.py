@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ur_api"))
-from gripper import grasp_verdict  # noqa: E402
+from gripper import check_width_feedback, grasp_verdict  # noqa: E402
 
 EMPTY = 0.003
 
@@ -33,5 +33,44 @@ class TestGraspVerdict(unittest.TestCase):
         self.assertEqual(self.verdict(0.002, 0.002, True, eps_in=0.001, eps_out=0.001), (True, "success"))
 
 
+class TestWidthFeedback(unittest.TestCase):
+    def test_negative_reading_is_rejected(self):
+        # 2026-11-11: the RG6 program reported -15.8 mm after a grasp
+        width, warning = check_width_feedback(-0.0158)
+        self.assertIsNone(width)
+        self.assertIn("-15.8 mm", warning)
+
+    def test_plausible_readings_pass(self):
+        self.assertEqual(check_width_feedback(0.035), (0.035, None))
+        self.assertEqual(check_width_feedback(0.0), (0.0, None))
+        self.assertEqual(check_width_feedback(-0.0003), (0.0, None))   # noise around 0
+        self.assertEqual(check_width_feedback(None), (None, None))
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestObjectDetected(unittest.TestCase):
+    """(2026-11-19) the gripper program's own detection (Robotiq rq_is_object_detected) from an output register"""
+
+    def reader(self, reg, value=None, fail=False):
+        from gripper import RG6Gripper
+        g = RG6Gripper.__new__(RG6Gripper)
+        g.object_reg = reg
+
+        class Regs:
+            def read_doubles(self, regs):
+                if fail:
+                    raise OSError("no RTDE")
+                return {r: value for r in regs}
+        g._regs = Regs()
+        return g._read_object()
+
+    def test_not_configured(self):
+        self.assertIsNone(self.reader(-1, 1.0))
+
+    def test_values(self):
+        self.assertIs(self.reader(19, 1.0), True)
+        self.assertIs(self.reader(19, 0.0), False)
+        self.assertIsNone(self.reader(19, -1.0))
+        self.assertIsNone(self.reader(19, fail=True))

@@ -116,11 +116,18 @@ def camera_exposure():
     camera. To change: auto=1 lets the camera decide; exposure=<n> and/or gain=<n> set them by hand (auto turns off, or
     send auto=0). Values are in the camera's own units, within the ranges it reports (400 outside them). Changing them
     does not affect the depth stream. Lasts until the server restarts; keep it with camera.auto_exposure/exposure/gain
-    in cell.yaml."""
+    in cell.yaml. reset=1 undoes the changes: back to cell.yaml's values, or auto exposure when it sets none ("default")."""
     r = _started()
     if r:
         return r
     a = request.args
+    if a.get("reset") in ("1", "true"):
+        if any(a.get(k) is not None for k in ("auto", "exposure", "gain")):
+            return jsonify({"error": "bad exposure args", "msg": "reset=1 takes no other parameter"}), 400
+        try:
+            return jsonify({"status": "reset", **C.camera.reset_exposure(), "default": C.camera.exposure_default}), 200
+        except NotImplementedError as e:
+            return jsonify({"error": "not_supported", "msg": str(e)}), 501
     try:
         auto = {None: None, "1": True, "0": False}[a.get("auto")]
         exposure = None if a.get("exposure") is None else int(a["exposure"])
@@ -129,8 +136,8 @@ def camera_exposure():
         return jsonify({"error": "bad exposure args", "msg": "auto=0|1; exposure and gain: integers"}), 400
     try:
         if auto is None and exposure is None and gain is None:
-            return jsonify(C.camera.get_exposure()), 200
-        return jsonify({"status": "set", **C.camera.set_exposure(auto, exposure, gain)}), 200
+            return jsonify({**C.camera.get_exposure(), "default": C.camera.exposure_default}), 200
+        return jsonify({"status": "set", **C.camera.set_exposure(auto, exposure, gain), "default": C.camera.exposure_default}), 200
     except NotImplementedError as e:
         return jsonify({"error": "not_supported", "msg": str(e)}), 501
     except ValueError as e:

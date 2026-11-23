@@ -49,7 +49,8 @@
   <xacro:macro name="tool_pair" params="a b reason">
     <disable_collisions link1="${p}${a}" link2="${p}${b}" reason="${reason}"/>
   </xacro:macro>
-  <xacro:property name="tool_links" value="${['tool_changer'] + gm['links'] + ['wrist_camera', 'camera_bracket']}"/>
+  <xacro:property name="tool_links" value="${['tool_changer'] + gm['links'] + ['wrist_camera', 'camera_bracket']
+                                           + ['gripper_collider_' + b['name'] for b in gm.get('collider_boxes', [])]}"/>
   <xacro:macro name="pairs" params="items">
     <xacro:if value="${len(items) > 1}">
       <xacro:macro name="with_rest" params="a rest">

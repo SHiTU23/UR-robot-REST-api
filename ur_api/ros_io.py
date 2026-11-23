@@ -24,6 +24,11 @@ def _latched(depth=1):
     return QoSProfile(depth=depth, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 
 
+EXECUTE_STATUS = "/execute_trajectory/_action/status"
+TRAJ_CONTROLLERS = ("scaled_joint_trajectory_controller", "joint_trajectory_controller")
+GOAL_ACTIVE = {1: "ACCEPTED", 2: "EXECUTING", 3: "CANCELING"}
+
+
 class RosIO:
     """Owns the node, the executor thread and the state caches."""
 
@@ -52,6 +57,10 @@ class RosIO:
         self.rosout_errors = []         # last ERROR/FATAL lines of /rosout (for last_error fields)
         self._clients = {}
         self._actions = {}
+        # (2026-11-20) the goals of MoveIt's execute action and of the trajectory controllers, as their action servers report them
+        # (action_msgs/GoalStatusArray). After a Stop on the real arm the scaled controller kept a goal in CANCELING and MoveIt waited
+        # for it: every later /execute_trajectory goal went unacknowledged (recover.py).
+        self.goal_status = {}           # status topic -> {goal id: status}
 
         n, cb = self.node, self.cb
         n.create_subscription(JointState, "/joint_states", self._on_joints, 50, callback_group=cb)
@@ -67,6 +76,10 @@ class RosIO:
         n.create_subscription(String, "/robot_description_semantic", self._on_srdf, _latched(), callback_group=cb)
         from rcl_interfaces.msg import Log
         n.create_subscription(Log, "/rosout", self._on_rosout, 100, callback_group=cb)
+        from action_msgs.msg import GoalStatusArray
+        for topic in (EXECUTE_STATUS, *(f"/{c}/follow_joint_trajectory/_action/status" for c in TRAJ_CONTROLLERS)):
+            n.create_subscription(GoalStatusArray, topic, lambda m, t=topic: self._on_goal_status(t, m), _latched(),
+                                  callback_group=cb)
         self.width_pub = n.create_publisher(Float64, "/gripper/width", _latched())
         self.display_pub = n.create_publisher(DisplayTrajectory, "/display_planned_path", 5)
         self.marker_pub = n.create_publisher(MarkerArray, "/ur_ee_force", 2)
@@ -188,7 +201,30 @@ class RosIO:
             self._actions[key] = ActionClient(self.node, action_type, name, callback_group=self.cb)
         return self._actions[key]
 
-    def run_action(self, action_type, name, goal, timeout_s, on_handle=None, wait_s=3.0):
+    def _on_goal_status(self, topic, msg):
+        with self._lock:
+            self.goal_status[topic] = {bytes(s.goal_info.goal_id.uuid).hex(): int(s.status) for s in msg.status_list}
+
+    def active_goals(self):
+        """{status topic: [status names]} of the goals still ACCEPTED / EXECUTING / CANCELING."""
+        with self._lock:
+            return {t: [GOAL_ACTIVE[s] for s in g.values() if s in GOAL_ACTIVE]
+                    for t, g in self.goal_status.items() if any(s in GOAL_ACTIVE for s in g.values())}
+
+    def restart_controller(self, name, timeout_s=5.0):
+        """Deactivate and activate a controller (no motion: the arm holds still in between). -> True if both switches
+        were reported ok."""
+        from controller_manager_msgs.srv import SwitchController
+        from builtin_interfaces.msg import Duration
+        ok = True
+        for off, on in (([name], []), ([], [name])):
+            req = SwitchController.Request(deactivate_controllers=off, activate_controllers=on,
+                                           strictness=SwitchController.Request.STRICT,
+                                           timeout=Duration(sec=int(timeout_s)))
+            ok = bool(self.call(SwitchController, "/controller_manager/switch_controller", req, timeout_s + 2).ok) and ok
+        return ok
+
+    def run_action(self, action_type, name, goal, timeout_s, on_handle=None, wait_s=3.0, ack_s=10.0):
         """Send a goal and wait for its result. ``on_handle(handle)`` receives the
         goal handle as soon as it is accepted (so another thread can cancel it).
         -> (accepted, result_or_None, status)."""
@@ -198,8 +234,9 @@ class RosIO:
         ev, box = threading.Event(), {}
         send = ac.send_goal_async(goal)
         send.add_done_callback(lambda f: (box.__setitem__("h", f.result()), ev.set()))
-        if not ev.wait(10.0):
-            raise err(504, "action_timeout", f"{name}: goal not acknowledged within 10 s")
+        if not ev.wait(ack_s):
+            raise err(504, "action_timeout", f"{name}: goal not acknowledged within {ack_s:g} s",
+                      hint="MoveIt may be waiting for a stopped goal: POST /control/recover")
         h = box["h"]
         if not h.accepted:
             return False, None, None

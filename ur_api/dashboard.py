@@ -8,6 +8,9 @@ import threading
 import time
 
 PORT = 29999
+RETRY_S = 10.0     # after a failed connect, commands fail at once for this long (2026-11-19): with the arm off every
+                   # connect took 2 x 5 s behind the lock, polled /health calls queued without end and the API ran out
+                   # of file handles (1024 sockets, "Too many open files")
 
 
 class DashboardError(RuntimeError):
@@ -20,9 +23,16 @@ class Dashboard:
         self._sock = None
         self._buf = b""
         self._lock = threading.RLock()
+        self._down_until = 0.0
 
     def _connect(self):
-        s = socket.create_connection((self.host, self.port), timeout=self.timeout_s)
+        if time.time() < self._down_until:
+            raise ConnectionError(f"unreachable at the last try, next try in {self._down_until - time.time():.0f} s")
+        try:
+            s = socket.create_connection((self.host, self.port), timeout=self.timeout_s)
+        except OSError:
+            self._down_until = time.time() + RETRY_S
+            raise
         s.settimeout(self.timeout_s)
         self._sock, self._buf = s, b""
         self._readline()                      # "Connected: Universal Robots Dashboard Server"

@@ -25,8 +25,9 @@ services:
     # the driver asks for real-time scheduling (it still runs without, with a warning)
     cap_add: [SYS_NICE]
     ulimits: {rtprio: 99, memlock: -1}
+    # cell.sh: the launch with the gripper picked on the web page; it exits when that changes (Docker restarts it)
     command: >
-      bash -c 'ros2 launch /app/ros/launch/cell.launch.py use_mock_hardware:=${UR_MOCK:-false}
+      bash -c '/app/ros/scripts/cell.sh use_mock_hardware:=${UR_MOCK:-false}
       $${UR_ROBOT_IP:+robot_ip:=$$UR_ROBOT_IP} headless_mode:=true launch_rviz:=false'
 
   api:

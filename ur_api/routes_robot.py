@@ -9,6 +9,7 @@ import re
 import time
 
 import numpy as np
+import yaml
 from flask import Blueprint, jsonify, request
 
 import geom
@@ -32,7 +33,8 @@ ACTIVITY = {"/control/gripper_open": "Opening gripper", "/control/gripper_close"
             "/control/gripper_grasp": "Grasping", "/control/gripper_homing": "Opening gripper",
             "/control/plan_cartesian_path": "Moving arm", "/control/plan_joint_path": "Moving arm",
             "/control/goto_joints": "Moving arm", "/control/goto_pose": "Moving to saved pose", "/control/rotate_tcp": "Rotating tool", "/control/home": "Moving home",
-            "/control/nudge_joint": "Moving a joint", "/control/resume": "Resuming the move"}
+            "/control/nudge_joint": "Moving a joint", "/control/resume": "Resuming the move",
+            "/gripper/model": "Switching the gripper model"}
 
 
 def activity():
@@ -60,6 +62,7 @@ def with_lock(fn):
             return fn(*a, **kw)
         finally:
             C.activity = None
+            C.last_activity_end = time.time()
             C.lock.release()
     return wrapper
 
@@ -128,6 +131,24 @@ def parse_max_travel():
     if deg < 0:
         raise ValueError("max_joint_travel_deg must be >= 0")
     return math.radians(deg)
+
+
+SPEED_RANGE = (0.01, 0.5)
+
+
+def parse_speed(vel_default, acc_default=None, get=None):
+    """(2026-11-19) velocity= and acceleration= of every motion endpoint: MoveIt's scaling factors (0.01..0.5 of the
+    joint speed and acceleration limits). acc_default None: the acceleration follows the velocity (what the
+    Cartesian moves always did). Short moves are acceleration-limited, so velocity alone hardly changes them."""
+    get = get or request.args.get
+    lo, hi = SPEED_RANGE
+    vel = float(get("velocity", vel_default))
+    raw = get("acceleration", None)
+    acc = float(raw) if raw is not None else (vel if acc_default is None else float(acc_default))
+    for k, v in (("velocity", vel), ("acceleration", acc)):
+        if not (math.isfinite(v) and lo <= v <= hi):
+            raise ValueError(f"{k} must be in {lo}..{hi}")
+    return vel, acc
 
 
 def tcp_pose(q):
@@ -296,7 +317,8 @@ def _gripper_body(res, attempts, rec_trig, rec_ok, **extra):
            "error_msg": res.get("error"), "gripper_width_m": res.get("width_m"),
            "width_measured": res.get("width_measured", False), "program": res.get("program"),
            "control_restored": res.get("control_restored"), "elapsed_s": res.get("elapsed_s"),
-           "notes": res.get("notes", [])}
+           "notes": res.get("notes", []), "width_warning": res.get("width_warning"),
+           "object_detected": res.get("object_detected")}     # (2026-11-19) the gripper's own detection; null when its program does not report it
     out.update(extra)
     return jsonify(out), OUTCOME_STATUS.get(res["outcome"], 500)
 
@@ -353,7 +375,8 @@ def gripper_grasp():
             res["error"] = error
             log.warning("grasp failed: %s", error)
     elif res["outcome"] == "success":
-        res.setdefault("notes", []).append("no width feedback: the object is NOT confirmed (object_held=null)")
+        why = "the width reading was rejected" if res.get("width_warning") else "no width feedback"
+        res.setdefault("notes", []).append(f"{why}: the object is NOT confirmed (object_held=null)")
     force = min(max(v["force"], C.gripper.min_force), C.gripper.max_force)
     return _gripper_body(res, n, rt, ro, used_width_cmd=v["width"], program_width_cmd=cmd, force=force,
                          object_held=C.gripper.holding)
@@ -362,6 +385,7 @@ def gripper_grasp():
 def _simple_move(width):
     res = C.gripper.move(width, None, closing=width < (C.gripper.state()["width_m"] or C.cell.max_width))
     return jsonify({"result": res["outcome"] == "success", "outcome": res["outcome"], "width_m": res.get("width_m"),
+                    "width_measured": res.get("width_measured", False), "width_warning": res.get("width_warning"),
                     "error": res.get("error")}), 200 if res["outcome"] == "success" else 500
 
 
@@ -446,16 +470,18 @@ def _rotate_waypoints(start, end, deg):
     return out
 
 
-def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None):
-    """A straight-line move to m's target, or through ``waypoints``. dry_run only plans and shows it in RViz."""
+def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None, acceleration=None):
+    """A straight-line move to m's target, or through ``waypoints``. dry_run only plans and shows it in RViz.
+    acceleration None: the velocity's value."""
     rej = preflight()
     if rej:
         return rej
     pose = target_pose(m)
     fraction = {"v": None}
+    acceleration = velocity if acceleration is None else acceleration
 
     def plan_fn():
-        traj, frac, code = C.motion.plan_cartesian(waypoints or [pose], vel=velocity, acc=velocity)
+        traj, frac, code = C.motion.plan_cartesian(waypoints or [pose], vel=velocity, acc=acceleration)
         fraction["v"] = frac
         return traj, frac >= 0.999 and code == 1, {"fraction": frac}
 
@@ -467,14 +493,14 @@ def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None):
         travel, far = C.motion.too_far(traj, limit) if ok else ({}, [])
         pts = traj.joint_trajectory.points if ok else []
         return jsonify({"outcome": "planned" if ok else "plan_failed", "dry_run": True, "fraction": fraction["v"],
-                        "target_pose": pose, "waypoints": len(pts),
+                        "target_pose": pose, "waypoints": len(pts), "velocity": velocity, "acceleration": acceleration,
                         "duration_s": (pts[-1].time_from_start.sec + pts[-1].time_from_start.nanosec * 1e-9) if pts else 0.0,
                         "joint_travel_deg": {k: round(math.degrees(v), 1) for k, v in travel.items()},
                         "would_be_rejected_as_too_large": far,
                         "tcp_drift_from_start_mm": round(_tcp_drift_mm(traj, tcp_pose(C.motion.current_q())["position"]), 3) if ok else None}), 200
 
     out = C.motion.plan_and_execute(plan_fn, m["auto_recover"], m["max_retries"], max_travel)
-    extra = {"fraction": str(fraction["v"]), "target_pose": pose}
+    extra = {"fraction": str(fraction["v"]), "target_pose": pose, "velocity": velocity, "acceleration": acceleration}
     if out["outcome"] == "plan_failed":
         extra["moveit_error"] = (f"PARTIAL_PATH (fraction={fraction['v']}, likely unreachable target, a collision on "
                                  "the line, or a joint limit)")
@@ -486,21 +512,19 @@ def do_cartesian(m, max_travel, velocity=0.05, dry_run=False, waypoints=None):
 def plan_cartesian_path():
     """Straight-line (MoveL) TCP move to ABSOLUTE x,y,z (metres; frame=base_link default, frame=base for the
     pendant frame, or frame=room for the room's axes). Orientation: roll&pitch&yaw (degrees, sxyz; straight down = 180,0,0) or qx&qy&qz&qw;
-    else preserve_orientation=1 keeps the current one, 0 resets to straight down. velocity=0.05 (scaling),
-    auto_recover=1, max_retries=1, max_joint_travel_deg=100 (big-swing guard, wrist_3 exempt; 0 disables).
-    dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
+    else preserve_orientation=1 keeps the current one, 0 resets to straight down. velocity=0.05, acceleration=<the
+    velocity> (0.01..0.5 scalings), auto_recover=1, max_retries=1, max_joint_travel_deg=100 (big-swing guard, wrist_3
+    exempt; 0 disables). dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
     try:
         m = parse_motion_args()
         mt = parse_max_travel()
-        vel = float(request.args.get("velocity", "0.05"))
-        if not 0.01 <= vel <= 0.5:
-            raise ValueError("velocity must be in 0.01..0.5")
+        vel, acc = parse_speed("0.05")
     except (TypeError, ValueError) as e:
         return jsonify({"error": "bad motion args", "msg": str(e)}), 400
     dry = _flag(request.args.get("dry_run", "0"), False)
     if not dry:
-        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel)
-    return do_cartesian(m, mt, vel, dry)
+        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel, acceleration=acc)
+    return do_cartesian(m, mt, vel, dry, acceleration=acc)
 
 
 @bp.route("/control/rotate_tcp", methods=["GET"])
@@ -508,7 +532,7 @@ def plan_cartesian_path():
 def rotate_tcp():
     """Turn the TCP about one of its axes while its position stays put: axis=x|y|z, deg=<signed, up to 45> (from the
     current orientation), frame=base_link (default, axes of the robot base) | base (pendant frame) | room (robot.room_yaw_deg) | tool (the TCP's own
-    axes, which turn with it). velocity=0.05, auto_recover=1, max_retries=1, max_joint_travel_deg=100; dry_run=1 plans
+    axes, which turn with it). velocity=0.05, acceleration=<the velocity>, auto_recover=1, max_retries=1, max_joint_travel_deg=100; dry_run=1 plans
     only, shows the plan in RViz and reports tcp_drift_from_start_mm. WARNING: moves the arm (unless dry_run=1)."""
     try:
         axis = request.args.get("axis", "").lower()
@@ -520,9 +544,7 @@ def rotate_tcp():
         frame = request.args.get("frame", C.cell.base_frame)
         if frame not in (C.cell.base_frame, "base", "room", "tool"):
             raise ValueError(f"frame must be {C.cell.base_frame}, base, room or tool")
-        vel = float(request.args.get("velocity", "0.05"))
-        if not 0.01 <= vel <= 0.5:
-            raise ValueError("velocity must be in 0.01..0.5")
+        vel, acc = parse_speed("0.05")
         mt = parse_max_travel()
         retries = int(request.args.get("max_retries", "1"))
     except (TypeError, ValueError) as e:
@@ -544,11 +566,11 @@ def rotate_tcp():
     dry = _flag(request.args.get("dry_run", "0"), False)
     if not dry:
         # /control/resume replans a straight line to the same pose
-        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel)
-    return do_cartesian(m, mt, vel, dry, wps)
+        _remember(kind="cartesian", m=m, max_travel=mt, velocity=vel, acceleration=acc)
+    return do_cartesian(m, mt, vel, dry, wps, acceleration=acc)
 
 
-def do_joint_path(m, planner_id, max_travel):
+def do_joint_path(m, planner_id, max_travel, velocity=0.3, acceleration=0.05):
     rej = preflight()
     if rej:
         return rej
@@ -556,12 +578,13 @@ def do_joint_path(m, planner_id, max_travel):
 
     def plan_fn():
         ok, traj, t, code, meta = C.motion.plan_pose(pose, planner_id, m["preserve_orientation"]
-                                                     and m["orientation"] is None)
+                                                     and m["orientation"] is None, vel=velocity, acc=acceleration)
         return traj, ok, {"planning_time": t, "error_code": code, "planner_id": planner_id, **meta}
 
     out = C.motion.plan_and_execute(plan_fn, m["auto_recover"], m["max_retries"], max_travel)
     meta = out.get("plan_metadata") or {}
-    extra = {"planning_time": str(meta.get("planning_time")), "planner_id": planner_id, "target_pose": pose}
+    extra = {"planning_time": str(meta.get("planning_time")), "planner_id": planner_id, "target_pose": pose,
+             "velocity": velocity, "acceleration": acceleration}
     if out["outcome"] == "plan_failed":
         extra["moveit_error"] = decode_error(meta.get("error_code"))
     return motion_response(out, extra)
@@ -573,7 +596,7 @@ def plan_joint_path():
     """Joint-space plan + execute of the TCP to x,y,z (same params as plan_cartesian_path) with planner_id=LIN
     (Pilz straight line, default) or RRTConnect (the target is first solved by IK for the configuration
     nearest the current joints, so the arm keeps its configuration; the least-travel of 3 plans runs).
-    WARNING: moves the arm."""
+    velocity=0.3, acceleration=0.05 (0.01..0.5 scalings). WARNING: moves the arm."""
     try:
         m = parse_motion_args()
         pid = request.args.get("planner_id", "LIN")
@@ -582,10 +605,11 @@ def plan_joint_path():
         if pid not in ("LIN", "RRTConnect"):
             raise ValueError("planner_id must be LIN or RRTConnect")
         mt = parse_max_travel()
+        vel, acc = parse_speed("0.3", "0.05")
     except (TypeError, ValueError) as e:
         return jsonify({"error": "bad motion args", "msg": str(e)}), 400
-    _remember(kind="joint", m=m, planner_id=pid, max_travel=mt)
-    return do_joint_path(m, pid, mt)
+    _remember(kind="joint", m=m, planner_id=pid, max_travel=mt, velocity=vel, acceleration=acc)
+    return do_joint_path(m, pid, mt, vel, acc)
 
 
 def parse_goto(current):
@@ -613,14 +637,12 @@ def parse_goto(current):
         raise ValueError(f"give joints=<{n} values> and/or j1..j{n}=<value>")
     if not all(math.isfinite(v) for v in target):
         raise ValueError("joint values must be finite")
-    velocity = float(get("velocity", "0.2"))
-    if not 0.01 <= velocity <= 0.5:
-        raise ValueError("velocity must be in 0.01..0.5")
+    velocity, acceleration = parse_speed("0.2", "0.1", get)    # (2026-11-19) acceleration was always 0.1
     mjt = get("max_joint_travel_deg")
     mt = None if mjt is None else math.radians(float(mjt))
     if mt is not None and mt < 0:
         raise ValueError("max_joint_travel_deg must be >= 0")
-    return {"target": target, "unit": unit, "velocity": velocity, "max_travel": mt,
+    return {"target": target, "unit": unit, "velocity": velocity, "acceleration": acceleration, "max_travel": mt,
             "auto_recover": _flag(get("auto_recover")), "max_retries": int(get("max_retries", "1")),
             "dry_run": _flag(get("dry_run", "0"), False)}
 
@@ -644,7 +666,7 @@ def do_goto(g):
             return rej
 
     def plan_fn():
-        ok, traj, t, code, planner = C.motion.plan_joint_goal(target, vel=g["velocity"], acc=0.1)
+        ok, traj, t, code, planner = C.motion.plan_joint_goal(target, vel=g["velocity"], acc=g["acceleration"])
         return traj, ok, {"planning_time": t, "error_code": code, "planner_used": planner}
 
     if g["dry_run"]:
@@ -660,14 +682,14 @@ def do_goto(g):
                 "joint_travel_deg": {j: round(math.degrees(t), 1) for j, t in travel.items()},
                 "would_be_rejected_as_too_large": [j for j, t in travel.items() if limit and t > limit
                                                    and j not in C.cell.travel_exempt],
-                "target_rad": target}
+                "target_rad": target, "velocity": g["velocity"], "acceleration": g["acceleration"]}
         if not ok:
             body["moveit_error"] = decode_error(meta["error_code"])
         return jsonify(body), 200 if ok else 202
     out = C.motion.plan_and_execute(plan_fn, g["auto_recover"], g["max_retries"], g["max_travel"])
     meta = out.get("plan_metadata") or {}
     extra = {"planner_used": meta.get("planner_used"), "planning_time": str(meta.get("planning_time")),
-             "target_rad": target}
+             "target_rad": target, "velocity": g["velocity"], "acceleration": g["acceleration"]}
     if out["outcome"] == "plan_failed":
         extra["moveit_error"] = decode_error(meta.get("error_code"))
     return motion_response(out, extra)
@@ -678,7 +700,7 @@ def goto_joints():
     """Move to an explicit joint configuration: joints=<6 values> (shoulder_pan .. wrist_3) and/or j1..j6=<value>
     to change single joints from the current pose; unit=rad|deg (default rad); POST JSON {"joints": [...],
     "unit": "deg"} too. Pilz PTP (straight in joint space, every joint monotonic), OMPL RRTConnect as fallback.
-    velocity=0.2 (0.01..0.5 scaling of the joint speed limits). dry_run=1 plans only and reports planner,
+    velocity=0.2 (0.01..0.5 scaling of the joint speed limits), acceleration=0.1 (0.01..0.5, of the acceleration limits). dry_run=1 plans only and reports planner,
     duration and per-joint travel. Target must be > joint_limit_margin_rad inside the limits (400
     target_near_limit) and collision-free (400 target_in_collision); big-swing guard max_joint_travel_deg=100
     except wrist_3 (409 plan_too_large; 0 disables); auto_recover=1, max_retries=1; /control/stop and
@@ -704,17 +726,15 @@ def goto_joints():
 @bp.route("/control/goto_pose", methods=["GET"])
 @with_lock
 def goto_pose():
-    """Move to a pose saved with POST /robot/poses: name=<name>, velocity=0.2 (0.01..0.5), max_joint_travel_deg=100
-    (big-swing guard; 0 disables), auto_recover=1, max_retries=1. Same planner and checks as /control/goto_joints.
-    dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
+    """Move to a pose saved with POST /robot/poses: name=<name>, velocity=0.2, acceleration=0.1 (0.01..0.5),
+    max_joint_travel_deg=100 (big-swing guard; 0 disables), auto_recover=1, max_retries=1. Same planner and checks as
+    /control/goto_joints. dry_run=1 plans only and shows the plan in RViz. WARNING: moves the arm (unless dry_run=1)."""
     pose = _load_poses().get(request.args.get("name", ""))
     if pose is None:
         raise err(404, "unknown_pose", f"no saved pose named {request.args.get('name', '')!r}; GET /robot/poses lists them")
     try:
-        velocity = float(request.args.get("velocity", "0.2"))
-        if not 0.01 <= velocity <= 0.5:
-            raise ValueError("velocity must be in 0.01..0.5")
-        g = {"target": [float(v) for v in pose["joints_rad"]], "unit": "rad", "velocity": velocity,
+        velocity, acceleration = parse_speed("0.2", "0.1")
+        g = {"target": [float(v) for v in pose["joints_rad"]], "unit": "rad", "velocity": velocity, "acceleration": acceleration,
              "max_travel": parse_max_travel(), "auto_recover": _flag(request.args.get("auto_recover")),
              "max_retries": int(request.args.get("max_retries", "1")),
              "dry_run": _flag(request.args.get("dry_run", "0"), False)}
@@ -739,9 +759,9 @@ def resume():
     if not ok:
         return jsonify({"error": "recovery_failed", "msg": why}), 409
     if lm["kind"] == "cartesian":
-        return do_cartesian(lm["m"], lm["max_travel"], lm["velocity"])
+        return do_cartesian(lm["m"], lm["max_travel"], lm["velocity"], acceleration=lm.get("acceleration"))
     if lm["kind"] == "joint":
-        return do_joint_path(lm["m"], lm["planner_id"], lm["max_travel"])
+        return do_joint_path(lm["m"], lm["planner_id"], lm["max_travel"], lm.get("velocity", 0.3), lm.get("acceleration", 0.05))
     return do_goto(dict(lm["g"], dry_run=False))
 
 
@@ -769,11 +789,17 @@ def nudge_joint():
 @with_lock
 def home():
     """Joint move to the cell's home pose (cell.yaml robot.home_joints_rad: the recorded eye-in-hand home).
-    PTP, RRTConnect as fallback, velocity scaling 0.3. Not subject to the big-swing guard. WARNING: moves the arm."""
+    PTP, RRTConnect as fallback, velocity=0.3, acceleration=0.1 (0.01..0.5 scalings). Not subject to the big-swing
+    guard. WARNING: moves the arm."""
+    try:
+        vel, acc = parse_speed("0.3", "0.1")
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": "bad home args", "msg": str(e)}), 400
     C.motion.clear_stop()
-    r = C.motion.move_joints(C.cell.home_q, vel=0.3, acc=0.1)
+    r = C.motion.move_joints(C.cell.home_q, vel=vel, acc=acc)
     if r["executed"]:
         return jsonify({"status": "homed", "msg": "arm moved to the home joint pose", "planner_used": r["planner_used"],
+                        "velocity": vel, "acceleration": acc,
                         "planning_time": str(r["planning_time"]), "home_rad": C.cell.home_q}), 200
     return jsonify({"status": "failed", "msg": "home motion failed", "planner_tried": ["PTP", "RRTConnect"],
                     "plan_error_codes": r.get("plan_error_codes"), "last_error": last_error()}), 500
@@ -865,6 +891,53 @@ def poses_delete(name):
     return jsonify({"status": "deleted", "name": name}), 200
 
 
+def _calibration_in_use(kin):
+    """Does the running robot description have these values? Joint origins, since mock hardware leaves out the hash."""
+    import xml.etree.ElementTree as ET
+    joints = {j.get("name"): j for j in ET.fromstring(C.ros.urdf).findall("joint")}
+    pairs = (("shoulder_pan_joint", "shoulder"), ("shoulder_lift_joint", "upper_arm"), ("elbow_joint", "forearm"),
+             ("wrist_1_joint", "wrist_1"), ("wrist_2_joint", "wrist_2"), ("wrist_3_joint", "wrist_3"))
+    for joint, link in pairs:
+        j = joints.get(C.cell.prefix + joint)
+        origin = j.find("origin") if j is not None else None
+        if origin is None:
+            return False
+        have = [float(v) for v in origin.get("xyz", "0 0 0").split()]
+        want = [kin[link][a] for a in "xyz"]
+        if max(abs(x - y) for x, y in zip(have, want)) > 1e-6:
+            return False
+    return True
+
+
+@bp.route("/robot/calibration", methods=["GET"])
+def robot_calibration():
+    """The arm's stored factory calibration. {available, file, hash, kinematics {shoulder.. wrist_3: {x, y, z, roll, pitch,
+    yaw}, hash}, source {serial, model, polyscope, read_at, calibration_status, checksum, dh}, applied (the running robot
+    description uses it), matches_robot (it matches what the controller reports now; null on mock hardware or when the
+    controller cannot be reached)}. format=yaml returns the file itself, ready for kinematics_params_file. 404 when none
+    is stored: tools/save_calibration.py reads it from the arm."""
+    import ur_calibration
+    path = C.cell.calibration_file
+    if not path or not os.path.exists(path):
+        raise err(404, "no_calibration", "no calibration is stored; run tools/save_calibration.py (./run.sh save-calibration)")
+    with open(path) as f:
+        text = f.read()
+    if request.args.get("format") == "yaml":
+        return text, 200, {"Content-Type": "application/yaml; charset=utf-8"}
+    if request.args.get("format") not in (None, "json"):
+        raise err(400, "bad_request", "format must be json or yaml")
+    doc = yaml.safe_load(text)
+    h = doc["kinematics"]["hash"]
+    matches = None
+    if not C.mock:
+        try:
+            matches = ur_calibration.calibration_hash(ur_calibration.read_kinematics(C.cell.robot_ip, timeout_s=3.0)) == h
+        except (OSError, TimeoutError) as e:
+            log.warning("could not read the controller's calibration: %s", e)
+    return jsonify({"available": True, "file": path, "hash": h, "kinematics": doc["kinematics"], "source": doc.get("source"),
+                    "applied": _calibration_in_use(doc["kinematics"]), "matches_robot": matches}), 200
+
+
 def _home_body():
     c = C.cell
     return {"home_rad": c.home_q, "home_deg": [math.degrees(v) for v in c.home_q],
@@ -915,18 +988,33 @@ def stop():
     return jsonify({"status": "stopped", "msg": "Robot stopped", "trajectories_cancelled": n}), 200
 
 
-@bp.route("/recover", methods=["GET"])
+@bp.route("/recover", methods=["GET", "POST"])
 def recover():
     """Clear what software may clear: unlock a protective stop (the controller refuses this in the first 5 s),
     close safety popups, and resend the driver's program when it is not running. Emergency / safeguard stops
-    need the hardware. 504 if it did not work within 15 s."""
+    need the hardware. 504 if it did not work within 15 s.
+    (2026-11-20) Then MoveIt: goals a Stop left active are cleared (the trajectory controller restarts, no motion) and an
+    empty trajectory checks that MoveIt takes goals again; if it does not, the API and the ROS side restart (202,
+    ~30-60 s). "moveit" in the answer says what was done. 409 while a motion runs."""
     ok, why = C.motion.recover()
     if not ok:
         return jsonify({"status": "timeout", "error": why or "recovery did not complete within timeout",
                         "safety_mode": SAFETY_NAMES.get(C.motion.safety_mode()),
                         "robot_mode": ROBOT_MODE_NAMES.get(C.motion.robot_mode()),
                         "program_running": C.motion.program_running()}), 504
-    return jsonify({"status": "recovered", "msg": "Robot recovered"}), 200
+    if not C.lock.acquire(blocking=False):
+        return busy()
+    import recover as R
+    restarting = False
+    try:
+        code, m = R.run(os.environ.get("UR_STATE_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")))
+        restarting = code == 202
+    finally:
+        if not restarting:                  # a restart keeps the lock: no motion may start before the process exits
+            C.lock.release()
+    if code == 200:
+        return jsonify({"status": "recovered", "msg": "Robot recovered: " + m["msg"], "moveit": m}), 200
+    return jsonify({"status": m["outcome"], "msg": m["msg"], "moveit": m}), code
 
 
 @bp.route("/health", methods=["GET"])
@@ -954,6 +1042,66 @@ def health():
         "robot_mode": ROBOT_MODE_NAMES.get(C.motion.robot_mode()),
         "safety_mode": SAFETY_NAMES.get(C.motion.safety_mode()),
     }), 200
+
+
+# ------------------------------------------------------------------ gripper model (web page selector)
+
+def _model_info(model):
+    from gripper_select import ROOT
+    with open(os.path.join(ROOT, "config", "grippers", model + ".yaml")) as f:
+        gm = yaml.safe_load(f)
+    g = C.cell.cfg["gripper"]
+    block = g.get(model) if isinstance(g.get(model), dict) else {}
+    if C.mock:
+        control = "simulated (mock hardware)"
+    elif model == "rg6" or block.get("type") == "pendant":
+        control = f"pendant program {block.get('close_program') or g.get('close_program')}"
+    else:
+        control = "none on the real arm (gripper endpoints answer 501)"
+    return {"model": model, "name": gm["name"], "control": control, "max_width_m": gm["max_width_m"],
+            "min_force_n": gm["min_force_n"], "max_force_n": gm["max_force_n"], "default_force_n": gm["default_force_n"]}
+
+
+@bp.route("/gripper/models", methods=["GET"])
+def gripper_models_get():
+    """The gripper models this cell knows (config/grippers/), the one in use and where that choice comes from
+    (env UR_GRIPPER | web page | cell config), and whether POST /gripper/model may change it."""
+    from gripper_select import gripper_models
+    forced = C.cell.gripper_model_source == "env UR_GRIPPER"
+    return jsonify({"current": C.cell.gripper_model, "source": C.cell.gripper_model_source, "switchable": not forced,
+                    "why_not": "the stack was started with UR_GRIPPER set; restart it without to switch here" if forced else None,
+                    "models": [_model_info(m) for m in gripper_models()]}), 200
+
+
+@bp.route("/gripper/model", methods=["POST"])
+@with_lock
+def gripper_model_set():
+    """Switch the gripper model: body {"model": "rg6" | "robotiq_2f85" | ...}. Saved in state/gripper_model, then the
+    API and the ROS side (robot model, MoveIt, TCP, limits) restart with it: about 30-60 s, during which the API does
+    not answer. Does not move the arm. 409 while anything runs or when env UR_GRIPPER forces the model."""
+    from gripper_select import GRIPPER_SELECTION, gripper_models
+    model = str((request.get_json(silent=True) or {}).get("model") or "")
+    if model not in gripper_models():
+        raise err(400, "unknown_model", f"unknown gripper model {model!r}", hint=f"one of {gripper_models()}")
+    if C.cell.gripper_model_source == "env UR_GRIPPER":
+        raise err(409, "model_forced", f"the stack was started with UR_GRIPPER={C.cell.gripper_model}",
+                   hint="restart it without UR_GRIPPER (./run.sh up) to pick the gripper on the web page")
+    if model == C.cell.gripper_model:
+        return jsonify({"status": "unchanged", "model": model}), 200
+    os.makedirs(os.path.dirname(GRIPPER_SELECTION), exist_ok=True)
+    tmp = GRIPPER_SELECTION + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(model + "\n")
+    os.replace(tmp, GRIPPER_SELECTION)
+    log.warning("gripper model %s -> %s (web page): restarting the API and the ROS side", C.cell.gripper_model, model)
+
+    def _restart():                      # after the answer is out; Docker (restart: unless-stopped) starts it again
+        time.sleep(1.0)
+        os._exit(3)
+    import threading
+    threading.Thread(target=_restart, daemon=True).start()
+    return jsonify({"status": "restarting", "model": model, "from": C.cell.gripper_model,
+                    "msg": f"switching to {_model_info(model)['name']}: the API is back in about 30-60 s"}), 202
 
 
 # ------------------------------------------------------------------ demo box (/simulation/*)

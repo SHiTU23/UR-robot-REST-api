@@ -16,8 +16,40 @@ mount_offset_m: -0.0222
 tcp_xy_m: [-0.00407, -0.00519]
 # How far the gripper is turned on the flange, about tool0 z. The operator confirmed 2026-11-03 that the fingers open
 # parallel to the camera's long side, which the hand-eye calibration puts at -0.508 rad (-29.1 deg) from tool0 x.
-mount_yaw_rad: -0.508
+# (2026-11-21, the operator's ground truth) the RG6 is mounted parallel to the camera: its fingers close along the camera's x
+# (long side). The model takes that direction from the hand-eye camera mount (cell_tool.xacro), so a recalibration turns
+# the gripper with the camera. Checked on the wrist camera image of 2026-11-21: both fingertips side by side along the
+# image x, their middle at the model's tcp pixel. The pendant TCP x is NOT along the fingers (turned ~23 deg on this arm).
+# mount_yaw_rad: an extra turn on top (0). History: -0.508 (11-03, camera then), 0.0 (along tool0 x, wrong by ~23 deg).
+closing_along_camera_x: true
+mount_yaw_rad: 0.0
 max_width_m: 0.160                      # datasheet stroke 0-160 mm (the model reaches 159 mm, see the table)
+# (2026-11-21) the widest opening the cell ever commands (pipeFit tools/ui/ur_pick.py OPEN_MAX_M: the operator's limit, never opened wider (2026-11-03)). The fingers in RViz and in MoveIt's
+# collision checks start at this width and never go wider: the old start at max_width_m (full stroke) made the
+# gripper collider wider than the gripper ever is.
+allowed_max_width_m: 0.100
+# (2026-11-21) Box colliders of the gripper: one link per box (gripper_collider_<name>, fixed to `link`, default the
+# hand link; centre and size in that link's frame, m), checked by MoveIt like every robot link and drawn in RViz
+# (routes_viz) and served by GET /robot/colliders. DERIVED from this model's collision meshes: the smallest box of
+# each link's mesh turned about the link's x (rpy), so a diagonal bar gets a thin box. The body box is fixed; the finger boxes ride on the moving finger links, so they open and close
+# with the width of every check (gripper_width_m of /plan/ik, /plan/check_trajectory ...): each plan is checked at its
+# own opening. (First version, same day: one finger-span box sized at allowed_max_width_m, 162 mm across even when
+# the fingers were open 35 mm.)
+collider_boxes:
+  - {name: body, link: rg6_base_link, center: [0.0022, -0.0003, 0.0835], size: [0.0755, 0.0835, 0.1668]}
+  - {name: left_outer_knuckle,  link: rg6_left_outer_knuckle,  center: [0.0, -0.0172, 0.0307], rpy: [0.5061, 0.0, 0.0], size: [0.0250, 0.0343, 0.1010]}
+  - {name: left_inner_knuckle,  link: rg6_left_inner_knuckle,  center: [-0.0001, -0.0219, 0.0336], rpy: [2.1991, 0.0, 0.0], size: [0.0250, 0.0909, 0.0131]}
+  - {name: left_inner_finger,   link: rg6_left_inner_finger,   center: [-0.0001, 0.0133, 0.0296], rpy: [1.2915, 0.0, 0.0], size: [0.0250, 0.0768, 0.0218]}
+  - {name: right_outer_knuckle, link: rg6_right_outer_knuckle, center: [0.0, -0.0172, 0.0307], rpy: [0.5061, 0.0, 0.0], size: [0.0250, 0.0343, 0.1010]}
+  - {name: right_inner_knuckle, link: rg6_right_inner_knuckle, center: [-0.0001, -0.0219, 0.0336], rpy: [2.1991, 0.0, 0.0], size: [0.0250, 0.0909, 0.0131]}
+  - {name: right_inner_finger,  link: rg6_right_inner_finger,  center: [-0.0001, 0.0133, 0.0296], rpy: [1.2915, 0.0, 0.0], size: [0.0250, 0.0768, 0.0218]}
+# (2026-11-22, the operator) the RG6 SET: this gripper + the OLD camera holder + the camera. The holder as it was in config/cell.yaml
+# tool.camera_mount_plate until 2026-11-22: its arm, 4.6 mm, lying on the camera's back (ur_api/camera_mount.py bracket). The camera
+# position: this set's own hand-eye (config/calibration/camera_mount_rg6.yaml, cell.yaml camera_mount_file_per_gripper).
+camera_holder:
+  arm_x_m: [-0.0295, 0.0295]
+  arm_y_m: [0.0300, 0.1073]
+  thickness_m: 0.0046
 min_force_n: 25.0                       # datasheet force range 25-120 N
 max_force_n: 120.0
 default_force_n: 40.0

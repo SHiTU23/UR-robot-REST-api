@@ -63,6 +63,28 @@ Visualization Manager:
     Update Interval: 0
     Visual Enabled: true
     Collision Enabled: false
+  # (2026-11-21) the robot's colliders, always on: what MoveIt checks (gripper body + fingers at the allowed opening,
+  # camera body, camera mount plate, tool changer, arm), see-through over the robot
+  - Class: rviz_default_plugins/RobotModel
+    Enabled: true
+    Name: Robot colliders
+    Value: true
+    Alpha: 0.5
+    Description Source: Topic
+    Description File: ''
+    Mass Properties:
+      Inertia: false
+      Mass: false
+    Description Topic:
+      Value: /robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    TF Prefix: ''
+    Update Interval: 0
+    Visual Enabled: false
+    Collision Enabled: true
   - Class: moveit_rviz_plugin/PlanningScene
     Enabled: true
     Name: Collision scene
@@ -95,7 +117,18 @@ Visualization Manager:
     Robot Color: 150; 50; 150
     Color Enabled: true
     Show Robot Visual: true
-    Show Robot Collision: false
+    Show Robot Collision: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: Overlays (display only)
+    Namespaces: {}
+    Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /ur_cell_overlays
+    Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

@@ -115,6 +115,9 @@ def api_help():
             "GET /control/stop to stop motion; GET /recover after a protective stop.",
             "GET /camera/stream for a live view; /camera/frame for colour + depth in one .npz.",
             "PUT /files/cad/part.stl (raw body) to store a CAD model; POST /scene/models, /scene/objects to place it.",
+            "Tables (heights from the client's calibration): GET /cell/surfaces, POST /cell/surfaces/<pick|place>/"
+            "calibrate (box out), PUT /cell/surfaces/<name> {point|points} (box back at the measured height), "
+            "POST .../cancel, DELETE.",
             "Scene API v2: GET /scene/info, POST /scene/batch, /scene/acm, /scene/padding, /scene/snapshot; plan-only: "
             "POST /plan/check_state, /plan/dry_run, /plan/ik, /plan/check_trajectory, /plan/dry_run_sequence; "
             "GET /robot/tf, /robot/description."],
@@ -124,7 +127,8 @@ def api_help():
                       "z (x and y negated); motion endpoints take frame=base to use it, or "
                       "frame=room for the room's axes (robot.room_yaw_deg)",
             "tcp": f"{C.cell.tcp_link}: fingertip centre with the gripper closed, {C.cell.tcp_z:.3f} m along tool0 z, "
-                   f"x {C.cell.tcp_xy[0]:+.5f} y {C.cell.tcp_xy[1]:+.5f} m off the flange axis",
+                   f"x {C.cell.tcp_xy[0]:+.5f} y {C.cell.tcp_xy[1]:+.5f} m off the flange axis, rpy "
+                   f"{[round(v, 5) for v in C.cell.tcp_rpy]} rad; from {C.cell.tcp_source}. GET/PUT /robot/tcp to change it",
             "joints": C.cell.arm_joints,
             "access": ("every endpoint except /, /ui, /login and /control/stop needs 'Authorization: Bearer <token>'"
                        if auth.enabled() else "open: no token (UR_API_AUTH=off); anyone who can reach this port can move the arm"),
@@ -164,6 +168,8 @@ def _gripper_note(cell, gripper):
     g = cell.gripper
     how = {"rg6": "via pendant programs (RTDE registers + dashboard); the driver regains control after every "
                   "gripper action",
+           "pendant": "via its pendant program (RTDE registers + dashboard, like the RG6); the driver regains "
+                      "control after every gripper action",
            "sim": "SIMULATED (mock hardware, or no control for this gripper yet): the fingers only move in the model",
            "none": "NOT CONTROLLABLE on this arm yet: gripper endpoints answer 501"}.get(gripper.backend, gripper.backend)
     return (f"{g['name']} ({cell.gripper_model}), {how}; 0..{g['max_width_m']:.3f} m, "
@@ -231,6 +237,16 @@ def build():
     if not C.ros.wait_for_description(60.0):
         raise SystemExit("no /robot_description within 60 s: is ros/launch/cell.launch.py running (same ROS_DOMAIN_ID)?")
     C.kin = Kinematics(C.ros.urdf, cell)
+    cell.use_urdf_tcp(C.kin.T_tool0_tcp)
+    log.info("TCP from %s: x %+.5f y %+.5f z %.5f m, rpy %s rad", cell.tcp_source, *cell.tcp_xy, cell.tcp_z,
+             [round(v, 5) for v in cell.tcp_rpy])
+    if abs(cell.tcp_z - cell.model_tcp_z) > 0.005:
+        log.warning("the TCP is %.1f mm %s the gripper model's closed fingertips (%.3f m): check the TCP on the pendant, "
+                    "or the tool length (tool.changer_length_m)", abs(cell.tcp_z - cell.model_tcp_z) * 1000,
+                    "beyond" if cell.tcp_z > cell.model_tcp_z else "short of", cell.model_tcp_z)
+    if any(abs(v) > 1e-4 for v in cell.tcp_rpy):
+        log.warning("the TCP is rotated against the flange (rpy %s rad): poses and rpy_deg refer to that rotated frame",
+                    [round(v, 4) for v in cell.tcp_rpy])
     cell.joint_limits = {n: (float(lo), float(hi)) for n, lo, hi in zip(cell.arm_joints, C.kin.lo, C.kin.hi)}
     cell.planning_frame = _root_link(C.kin.urdf)
     T = C.kin.urdf.fk(cell.base_frame, {}, cell.planning_frame)
@@ -267,6 +283,13 @@ def build():
         log.error("built-in world geometry (%s) NOT confirmed in the planning scene!", cell.builtin_world)
     log.info("legacy scene restored: %s", C.legacy.restore())
     log.info("scene v2 restored: %s", C.core.load_and_restore())
+    import routes_surfaces                       # (2026-11-21) the tables turned to the chosen axes, cell.yaml footprints
+    log.info("tables rebuilt (axes %s): %s", routes_surfaces.axes(), routes_surfaces.reconcile())
+    try:                                         # (2026-11-21) display-only RViz overlays (routes_viz), saved ones again
+        import routes_viz
+        log.info("RViz overlays published: %d markers", routes_viz.publish())
+    except Exception as e:  # noqa: BLE001
+        log.warning("RViz overlays not published: %s", e)
     C.core.send_colors()
     C.core.start_color_keeper()
     log.info("ready: %s, planning frame %s, tcp %s, gripper %s, camera %s%s", cell.ur_type, cell.planning_frame,
@@ -278,7 +301,10 @@ def register():
     import routes_plan
     import routes_robot
     import routes_scene
-    for bp in (routes_robot.bp, routes_scene.bp, routes_plan.bp, routes_io.bp):
+    import routes_surfaces
+    import routes_tcp
+    import routes_viz
+    for bp in (routes_robot.bp, routes_scene.bp, routes_plan.bp, routes_io.bp, routes_surfaces.bp, routes_tcp.bp, routes_viz.bp):
         app.register_blueprint(bp)
 
 
@@ -286,6 +312,8 @@ def main():
     auth.load_token(os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state")))
     build()
     register()
+    import tcp_follow
+    tcp_follow.start(os.environ.get("UR_STATE_DIR", os.path.join(ROOT, "state")))
     host, port = os.environ.get("UR_API_HOST", "127.0.0.1"), int(os.environ.get("UR_API_PORT", "5000"))
     if host not in ("127.0.0.1", "localhost", "::1"):
         log.warning("listening on %s: the token and all commands cross that network unencrypted", host)
