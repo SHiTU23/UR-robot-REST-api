@@ -54,10 +54,11 @@ ROBOT_COLLIDERS = {"wrist_camera": ("camera body", [0.1, 0.55, 1.0, 0.35]),
                    "gripper_collider": ("gripper at the allowed opening", [1.0, 0.45, 0.0, 0.3])}
 
 
-def robot_colliders() -> dict:
-    """{robot_colliders.<link>: overlay} of the collision boxes of ROBOT_COLLIDERS' links in the live robot model"""
+def robot_colliders(xml: str | None = None) -> dict:
+    """{robot_colliders.<link>: overlay} of the collision boxes of ROBOT_COLLIDERS' links in the live robot model (or in `xml`, another
+    gripper's model: other_model)"""
     import xml.etree.ElementTree as ET
-    xml = getattr(C.ros, "urdf", None)
+    xml = xml or getattr(C.ros, "urdf", None)
     if not xml:
         return {}
     out = {}
@@ -217,6 +218,38 @@ def trajectory_show():
                     "topic": "/display_planned_path", "note": "display only: nothing moves"}), 200
 
 
+MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state", "robot_models")
+_models = {}
+
+
+def other_model(model: str):
+    """(2026-11-22) (urdf xml, Urdf, gripper spec, finger_q) of a gripper that is not loaded, from the robot model the last start wrote
+    (ros/launch/cell.launch.py _other_models: state/robot_models/<model>.urdf) and its config/grippers/<model>.yaml. Cached by file time"""
+    import numpy as np
+    import yaml
+    from gripper_select import gripper_models
+    from kinematics import Urdf
+    if model not in gripper_models():
+        raise err(400, "unknown_model", f"unknown gripper model {model!r}", hint=f"one of {gripper_models()}")
+    path = os.path.join(MODELS_DIR, model + ".urdf")
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        raise err(404, "no_model", f"no robot model of {model} yet: it is written at every start of the stack (state/robot_models)",
+                  hint="restart the stack once (./run.sh restart)") from None
+    c = _models.get(model)
+    if not c or c[0] != mt:
+        with open(path) as f:
+            xml = f.read()
+        with open(os.path.join(os.path.dirname(MODELS_DIR), "..", "config", "grippers", model + ".yaml")) as f:
+            spec = yaml.safe_load(f)
+        rows = sorted(spec["table"], key=lambda r: r[1])
+        tw, tj, joint = [float(r[1]) for r in rows], [float(r[0]) for r in rows], C.cell.prefix + spec["joint"]
+        c = (mt, xml, Urdf(xml), spec, lambda w: {joint: float(np.interp(w, tw, tj))})
+        _models[model] = c
+    return c[1:]
+
+
 @bp.route("/robot/colliders", methods=["GET"])
 def colliders_get():
     """(2026-11-21) the robot's box colliders (ROBOT_COLLIDERS: camera body, camera mount plate, gripper boxes) as they are at a
@@ -225,24 +258,31 @@ def colliders_get():
     MoveIt checks; a client draws them or measures with them (pipeFit's 3-D view)"""
     import numpy as np
     import xml.etree.ElementTree as ET
+    # (2026-11-22) ?gripper=<model>: the boxes of that gripper (its robot model of the last start, other_model), also when it is not the one
+    # loaded; default and the loaded one: the live model as before. Planning always uses the loaded gripper
+    model = request.args.get("gripper") or C.cell.gripper_model
+    if model == C.cell.gripper_model:
+        xml, urdf, spec, finger_q = None, C.kin.urdf, C.cell.gripper_spec, C.cell.finger_q
+    else:
+        xml, urdf, spec, finger_q = other_model(model)
     frame = request.args.get("frame") or C.cell.tcp_link
-    if frame not in C.kin.urdf.links:
+    if frame not in urdf.links:
         raise err(400, "bad_frame", f"frame {frame!r} is not a robot link", "frame")
-    spec = C.cell.gripper_spec
     w = request.args.get("width")
     try:
         w = float(w) if w not in (None, "") else float(spec.get("allowed_max_width_m", spec["max_width_m"]))
     except ValueError:
         raise err(400, "bad_request", "width is a number (m)", "width") from None
-    if not 0.0 <= w <= C.cell.max_width:
-        raise err(400, "bad_request", f"width is 0..{C.cell.max_width} m", "width")
-    q = C.cell.finger_q(w)
+    max_w = C.cell.max_width if xml is None else float(spec["max_width_m"])
+    if not 0.0 <= w <= max_w:
+        raise err(400, "bad_request", f"width is 0..{max_w} m", "width")
+    q = finger_q(w)
     root = C.cell.base_frame                       # Urdf.fk walks down the tree only: both through the base (the arm at 0, it cancels)
-    T_frame_root = np.linalg.inv(C.kin.urdf.fk(frame, q, root))
+    T_frame_root = np.linalg.inv(urdf.fk(frame, q, root))
     boxes = []
-    for oid, o in robot_colliders().items():
+    for oid, o in robot_colliders(xml).items():
         link = o["frame_id"]
-        T_f_link = T_frame_root @ C.kin.urdf.fk(link, q, root)
+        T_f_link = T_frame_root @ urdf.fk(link, q, root)
         key = "gripper_collider" if link.startswith("gripper_collider_") else link
         for b in o["boxes"]:
             x, y, z, s_ = b["orientation"]
@@ -253,4 +293,4 @@ def colliders_get():
             T_b[:3, :3], T_b[:3, 3] = R, b["position"]
             boxes.append({"link": link, "kind": key, "label": o["label"], "color": o["color"], "size": b["size"],
                           "T": np.round(T_f_link @ T_b, 6).tolist()})
-    return jsonify({"frame": frame, "width_m": w, "gripper": C.cell.gripper_model, "boxes": boxes}), 200
+    return jsonify({"frame": frame, "width_m": w, "gripper": model, "loaded": model == C.cell.gripper_model, "boxes": boxes}), 200

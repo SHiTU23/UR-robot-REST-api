@@ -68,11 +68,54 @@ def _camera():
     print(f"[cell.launch] camera mount: {'xyz ' + str(d['xyz_m']) + ' rpy ' + str(d['rpy_rad']) + ' (' + path + ', ' + str((d.get('source') or {}).get('at')) + ')' if d else 'config/cell.yaml tool.camera_*'}", flush=True)
 
 
+MODELS_DIR = os.path.join(HERE, "..", "..", "state", "robot_models")
+
+
+def _other_models(ur_type):
+    """(2026-11-22) the robot model of EVERY gripper (config/grippers/), not only the loaded one, to state/robot_models/<model>.urdf, so
+    GET /robot/colliders?gripper=<model> can show the boxes of a gripper that is not mounted (pipeFit's 3-D view of a scene captured with
+    it; planning always uses the loaded model). Each as its SET: its own camera position (camera_mount.load_for) and camera holder
+    (tool_for); the loaded gripper with the TCP this start uses, the others with their saved TCP (robot.tcp_file), else their model's. In a thread: the start does not wait; a failure is only printed."""
+    import subprocess
+    import threading
+    from gripper_select import gripper_models
+
+    def run():
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        tcp_tpl = CELL["robot"].get("tcp_file") or ""
+        for m in gripper_models():
+            if m == GRIPPER:
+                tcp, cam = os.environ.get("UR_TCP", ""), os.environ.get("UR_CAMERA_MOUNT", "")
+            else:
+                d = ur_tcp.load(tcp_tpl.replace("{model}", m), m) if tcp_tpl else None
+                tcp = ur_tcp.as_arg(d) if d else ""
+                with open(os.path.join(HERE, "..", "..", "config", "grippers", m + ".yaml")) as f:
+                    gm = yaml.safe_load(f)
+                cm, _, _ = camera_mount.load_for(CELL, m)          # that SET's camera position and holder
+                cam = camera_mount.as_arg(cm, camera_mount.tool_for(CELL["tool"], gm)) if cm else ""
+            out = os.path.join(MODELS_DIR, m + ".urdf")
+            try:
+                r = subprocess.run(["xacro", os.path.join(HERE, "..", "urdf", "ur_cell.urdf.xacro"), f"gripper:={m}", f"tcp:={tcp}",
+                                    f"camera_mount:={cam}", f"ur_type:={ur_type}", "name:=ur"],
+                                   capture_output=True, text=True, timeout=120)
+                if r.returncode != 0:
+                    raise RuntimeError(r.stderr.strip()[-300:])
+                with open(out + ".tmp", "w") as f:
+                    f.write(r.stdout)
+                os.replace(out + ".tmp", out)
+                print(f"[cell.launch] robot model of {m} -> {out}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[cell.launch] robot model of {m} NOT written: {e}", flush=True)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _nodes(context):
     lc = lambda n: LaunchConfiguration(n).perform(context)  # noqa: E731
     mock = lc("use_mock_hardware").lower() == "true"
     _tcp(mock, lc("robot_ip") or CELL["robot"]["ip"])
     _camera()
+    _other_models(lc("ur_type"))
     calibration = {"kinematics_params_file": KINEMATICS} if KINEMATICS else {}
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
