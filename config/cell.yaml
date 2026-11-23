@@ -60,6 +60,9 @@ tool:
   # screw holes = minus the image x (how the camera sits on it). With a saved camera_mount the bracket box is the
   # plate's arm, turned so, lying on the camera's back face (2026-11-21: its height from the hand-eye too, it was drawn
   # on the flange face ~60 mm above the camera; ur_api/camera_mount.py bracket).
+  # (2026-11-22, the operator) each GRIPPER SET has its own camera holder: config/grippers/<model>.yaml camera_holder replaces this
+  # (camera_mount.tool_for). rg6: this old holder (the arm box below); robotiq_2f85: RealsenseMount.stl's boxes. This one stays the
+  # default for a gripper without camera_holder.
   camera_mount_plate:
     arm_x_m: [-0.0295, 0.0295]
     arm_y_m: [0.0300, 0.1073]
@@ -68,6 +71,10 @@ tool:
   # is accepted): when this file exists it replaces camera_xyz_m / camera_rpy_rad above, and the bracket box becomes a
   # bar from the changer to the camera (bracket_size_m gives its width and thickness). ur_api/camera_mount.py
   camera_mount_file: /app/config/calibration/camera_mount.yaml
+  # (2026-11-22, the operator) each gripper set (gripper + its camera holder + the camera) has its own camera position: PUT
+  # /robot/camera_mount saves to the mounted set's file, and each start loads the set's own; a set never calibrated on its own uses
+  # camera_mount_file above (camera_mount.load_for). camera_mount.yaml was saved 2026-11-21 14:50 CET with the RG6 mounted.
+  camera_mount_file_per_gripper: /app/config/calibration/camera_mount_{model}.yaml
 
 # OnRobot RG6 driven like ~/sota/ui/robot.py: write width (mm) and force (N) into RTDE input
 # registers, then play a pendant program that reads them, then hand control back to the driver.

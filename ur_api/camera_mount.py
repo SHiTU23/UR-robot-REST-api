@@ -27,9 +27,34 @@ SAME_MM = 1.0             # a saved mount within this and SAME_DEG of the one in
 SAME_DEG = 0.2
 
 
-def path_for(cell_cfg):
+def path_for(cell_cfg, model=None):
+    """the camera mount file to SAVE to: (2026-11-22) per gripper set (tool.camera_mount_file_per_gripper, {model}) when a model is given,
+    else the shared tool.camera_mount_file"""
     t = (cell_cfg or {}).get("tool") or {}
+    per = t.get("camera_mount_file_per_gripper")
+    if model and per:
+        return per.replace("{model}", model)
     return t.get("camera_mount_file") or None
+
+
+def load_for(cell_cfg, model):
+    """(2026-11-22) (doc, path, own) of a gripper set's camera mount: its own file (the last hand-eye accepted while that set was mounted),
+    else the shared tool.camera_mount_file (own False: this set was never calibrated on its own); (None, None, False) without either.
+    The operator: each set (gripper + its camera holder + the camera) has its own camera position"""
+    own = path_for(cell_cfg, model)
+    d = load(own) if own else None
+    if d:
+        return d, own, True
+    shared = path_for(cell_cfg)
+    d = load(shared) if shared else None
+    return (d, shared, False) if d else (None, None, False)
+
+
+def tool_for(tool, gm):
+    """(2026-11-22) the tool config with this gripper set's camera holder (config/grippers/<model>.yaml camera_holder) in place of
+    tool.camera_mount_plate; a gripper without one keeps cell.yaml's"""
+    h = (gm or {}).get("camera_holder")
+    return dict(tool, camera_mount_plate=h) if h else tool
 
 
 def rpy_to_R(rpy):
@@ -106,6 +131,18 @@ def bracket(xyz, rpy, tool):
     cc = tool.get("camera_box_center_m") or [0.0, 0.0, 0.0]
     b = [xyz[i] + sum(R[i][k] * cc[k] for k in range(3)) for i in range(3)]       # the body's centre in tool0
     pl = tool.get("camera_mount_plate")
+    if pl and pl.get("boxes_m"):
+        # (2026-11-22) the mount's real shape from its STL (cell.yaml camera_mount_plate.boxes_m): the bracket link is the PLATE FRAME
+        # (origin on the flange axis at the plate's mid-thickness, z = tool0 z, y towards the camera, x = minus the image x; the plate's
+        # underside on the camera's back face as before) and its boxes sit in it (plate_boxes, drawn by cell_tool.xacro). size = their bounds
+        yaw = math.atan2(-R[1][0], -R[0][0])
+        th = float(pl["thickness_m"])
+        depth = float((tool.get("camera_box_m") or [0.0, 0.0, 0.0])[2])
+        z_back = b[2] - R[2][2] * depth / 2
+        bx = plate_boxes(tool)
+        lo = [min(c[i] - s_[i] / 2 for c, s_ in bx) for i in range(3)]
+        hi = [max(c[i] + s_[i] / 2 for c, s_ in bx) for i in range(3)]
+        return [hi[i] - lo[i] for i in range(3)], [0.0, 0.0, z_back - th / 2], [0.0, 0.0, yaw]
     if pl:
         ax, ay = -R[0][0], -R[1][0]                     # minus the image x, flattened onto the flange plane
         yaw = math.atan2(ay, ax)
@@ -127,6 +164,19 @@ def bracket(xyz, rpy, tool):
     yaw = math.atan2(b[1], b[0])
     rm = (r0 + r1) / 2
     return [r1 - r0, width, thick], [rm * math.cos(yaw), rm * math.sin(yaw), b[2]], [0.0, 0.0, yaw]
+
+
+def plate_boxes(tool) -> list:
+    """(2026-11-22) [(centre [3], size [3])] of camera_mount_plate.boxes_m in the plate frame (bracket()): x and y ranges from the STL,
+    the full thickness, centred on the mid-plane; mirror_x turns the STL over (its wing on the other side). [] without boxes_m"""
+    pl = tool.get("camera_mount_plate") or {}
+    th, m = float(pl.get("thickness_m", 0.0)), (-1.0 if pl.get("mirror_x") else 1.0)
+    out = []
+    for b in pl.get("boxes_m") or []:
+        x0, x1 = sorted((m * float(b["x"][0]), m * float(b["x"][1])))
+        y0, y1 = float(b["y"][0]), float(b["y"][1])
+        out.append(([(x0 + x1) / 2, (y0 + y1) / 2, 0.0], [x1 - x0, y1 - y0, th]))
+    return out
 
 
 def as_arg(d, tool):

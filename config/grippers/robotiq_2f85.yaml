@@ -23,6 +23,19 @@ max_width_m: 0.085                      # datasheet stroke 85 mm (the model: 85.
 # collision checks start at this width and never go wider: the old start at max_width_m (full stroke) made the
 # gripper collider wider than the gripper ever is.
 allowed_max_width_m: 0.085
+# (2026-11-22, the operator) the ROBOTIQ SET: this gripper + the NEW camera holder (~/Downloads/RealsenseMount.stl) + the camera.
+# Measured on the STL (surface samples, mm): SOLID 11.6 mm (faces z 0 and 11.6), L-shaped: the arm x +-29.55 out to y 107.3, a wing on
+# ONE side x 29.55..66.95, y 91.7..107.3. The ring round the flange axis (r 35.84) has no box: inside the tool changer (r 37.5), already a
+# collider; the arm box starts where it leaves the ring (y = sqrt(35.84^2 - 29.55^2) = 20.3). Plate frame: origin on the flange axis,
+# z = tool0 z, y towards the camera, x = minus the image x, underside on the camera's back (ur_api/camera_mount.py bracket); mirror_x
+# puts the wing on the other side (the STL seen from its other face). NOT RESOLVED: placed so with the RG6 set's hand-eye the camera's
+# footprint lies at y 109..136, just beyond the mount's end (107.3); this set's own hand-eye (camera_mount_robotiq_2f85.yaml) settles it.
+camera_holder:
+  thickness_m: 0.0116
+  mirror_x: false
+  boxes_m:
+    - {name: arm,  x: [-0.02955, 0.02955], y: [0.0203, 0.1073]}
+    - {name: wing, x: [0.02955, 0.06695],  y: [0.0917, 0.1073]}
 min_force_n: 20.0                       # datasheet grip force 20-235 N
 max_force_n: 235.0
 default_force_n: 40.0

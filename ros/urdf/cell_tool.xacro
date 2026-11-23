@@ -118,8 +118,38 @@
     <xacro:property name="bs" value="${pcm[12:15] if pcm else t['bracket_size_m']}"/>
     <xacro:property name="bx" value="${pcm[6:9] if pcm else t['bracket_xyz_m']}"/>
     <xacro:property name="br" value="${pcm[9:12] if pcm else t['bracket_rpy_rad']}"/>
-    <xacro:cell_box name="${tf_prefix}camera_bracket" size="${bs[0]} ${bs[1]} ${bs[2]}" xyz="0 0 0" rpy="0 0 0"
-                    rgba="0.3 0.3 0.35 1"/>
+    <!-- (2026-11-22) with a saved camera mount and the gripper set's camera_holder.boxes_m (the mount's STL): the bracket link is the
+         plate frame (ur_api/camera_mount.py bracket) and holds one box per entry (camera_mount.plate_boxes: x mirrored with mirror_x,
+         full thickness, centred on the mid-plane). Else the single box as before -->
+    <xacro:property name="plate" value="${gm.get('camera_holder') or t.get('camera_mount_plate') or dict()}"/>
+    <xacro:if value="${bool(pcm) and bool(plate.get('boxes_m'))}">
+      <xacro:property name="pm" value="${-1.0 if plate.get('mirror_x') else 1.0}"/>
+      <xacro:property name="pth" value="${float(plate['thickness_m'])}"/>
+      <xacro:macro name="plate_box" params="boxes">
+        <xacro:if value="${len(boxes) > 0}">
+          <xacro:property name="p0" value="${boxes[0]}"/>
+          <xacro:property name="px0" value="${min(pm * p0['x'][0], pm * p0['x'][1])}"/>
+          <xacro:property name="px1" value="${max(pm * p0['x'][0], pm * p0['x'][1])}"/>
+          <visual>
+            <origin xyz="${(px0 + px1) / 2} ${(p0['y'][0] + p0['y'][1]) / 2} 0" rpy="0 0 0"/>
+            <geometry><box size="${px1 - px0} ${p0['y'][1] - p0['y'][0]} ${pth}"/></geometry>
+            <material name="camera_bracket_mat"><color rgba="0.3 0.3 0.35 1"/></material>
+          </visual>
+          <collision>
+            <origin xyz="${(px0 + px1) / 2} ${(p0['y'][0] + p0['y'][1]) / 2} 0" rpy="0 0 0"/>
+            <geometry><box size="${px1 - px0} ${p0['y'][1] - p0['y'][0]} ${pth}"/></geometry>
+          </collision>
+          <xacro:plate_box boxes="${boxes[1:]}"/>
+        </xacro:if>
+      </xacro:macro>
+      <link name="${tf_prefix}camera_bracket">
+        <xacro:plate_box boxes="${plate['boxes_m']}"/>
+      </link>
+    </xacro:if>
+    <xacro:unless value="${bool(pcm) and bool(plate.get('boxes_m'))}">
+      <xacro:cell_box name="${tf_prefix}camera_bracket" size="${bs[0]} ${bs[1]} ${bs[2]}" xyz="0 0 0" rpy="0 0 0"
+                      rgba="0.3 0.3 0.35 1"/>
+    </xacro:unless>
     <joint name="${tf_prefix}tool0-camera_bracket" type="fixed">
       <parent link="${tf_prefix}tool0"/>
       <child link="${tf_prefix}camera_bracket"/>

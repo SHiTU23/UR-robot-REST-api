@@ -43,6 +43,13 @@ collider_boxes:
   - {name: right_outer_knuckle, link: rg6_right_outer_knuckle, center: [0.0, -0.0172, 0.0307], rpy: [0.5061, 0.0, 0.0], size: [0.0250, 0.0343, 0.1010]}
   - {name: right_inner_knuckle, link: rg6_right_inner_knuckle, center: [-0.0001, -0.0219, 0.0336], rpy: [2.1991, 0.0, 0.0], size: [0.0250, 0.0909, 0.0131]}
   - {name: right_inner_finger,  link: rg6_right_inner_finger,  center: [-0.0001, 0.0133, 0.0296], rpy: [1.2915, 0.0, 0.0], size: [0.0250, 0.0768, 0.0218]}
+# (2026-11-22, the operator) the RG6 SET: this gripper + the OLD camera holder + the camera. The holder as it was in config/cell.yaml
+# tool.camera_mount_plate until 2026-11-22: its arm, 4.6 mm, lying on the camera's back (ur_api/camera_mount.py bracket). The camera
+# position: this set's own hand-eye (config/calibration/camera_mount_rg6.yaml, cell.yaml camera_mount_file_per_gripper).
+camera_holder:
+  arm_x_m: [-0.0295, 0.0295]
+  arm_y_m: [0.0300, 0.1073]
+  thickness_m: 0.0046
 min_force_n: 25.0                       # datasheet force range 25-120 N
 max_force_n: 120.0
 default_force_n: 40.0

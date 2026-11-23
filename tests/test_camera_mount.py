@@ -60,6 +60,45 @@ class TestCameraMount(unittest.TestCase):
         self.assertAlmostEqual(bx[2] + size[2] / 2, back, delta=1e-6)       # the plate's underside on the camera's back face
         self.assertAlmostEqual(back, 0.0644, delta=0.0005)
 
+    def test_plate_boxes_from_the_stl(self):
+        """(2026-11-22) camera_mount_plate.boxes_m (the mount's STL): the bracket is the plate frame on the flange axis, its underside on
+        the camera's back, and the boxes sit in it; mirror_x moves the wing to the other side"""
+        plate = {"thickness_m": 0.0116, "boxes_m": [{"name": "arm", "x": [-0.02955, 0.02955], "y": [0.0203, 0.1073]},
+                                                     {"name": "wing", "x": [0.02955, 0.06695], "y": [0.0917, 0.1073]}]}
+        tool = dict(TOOL, camera_box_m=[0.092, 0.027, 0.032], camera_box_center_m=[0.0157, -0.0029, -0.0123], camera_mount_plate=plate)
+        xyz, rpy = [-0.057499, -0.106006, 0.09273], [0.001115, 0.002597, -0.399642]      # the hand-eye of 2026-11-21
+        size, bx, br = cm.bracket(xyz, rpy, tool)
+        self.assertEqual(bx[:2], [0.0, 0.0])                                             # on the flange axis
+        self.assertAlmostEqual(bx[2] + 0.0116 / 2, 0.0644, delta=0.0005)                 # underside on the camera's back face
+        self.assertAlmostEqual(math.degrees(br[2]), 157.1, delta=0.1)
+        self.assertEqual([round(v, 4) for v in size], [0.0965, 0.087, 0.0116])
+        boxes = cm.plate_boxes(tool)
+        self.assertEqual([[round(v, 5) for v in c] for c, _ in boxes], [[0.0, 0.0638, 0.0], [0.04825, 0.0995, 0.0]])
+        mirrored = cm.plate_boxes(dict(tool, camera_mount_plate=dict(plate, mirror_x=True)))
+        self.assertAlmostEqual(mirrored[1][0][0], -0.04825, places=6)
+        self.assertEqual(len(cm.as_arg({"xyz_m": xyz, "rpy_rad": rpy}, tool).split()), 15)
+
+    def test_gripper_sets(self):
+        """(2026-11-22) each gripper set has its own camera holder (gripper yaml camera_holder) and its own camera mount file; a set
+        never calibrated on its own falls back to the shared file"""
+        old = {"arm_x_m": [-0.0295, 0.0295], "arm_y_m": [0.0300, 0.1073], "thickness_m": 0.0046}
+        new = {"thickness_m": 0.0116, "boxes_m": [{"name": "arm", "x": [-0.02955, 0.02955], "y": [0.0203, 0.1073]}]}
+        tool = dict(TOOL, camera_mount_plate=old)
+        self.assertIs(cm.tool_for(tool, {}), tool)                                      # no camera_holder: cell.yaml's
+        self.assertEqual(cm.tool_for(tool, {"camera_holder": new})["camera_mount_plate"], new)
+        with tempfile.TemporaryDirectory() as d:
+            cfg = {"tool": {"camera_mount_file": os.path.join(d, "camera_mount.yaml"),
+                            "camera_mount_file_per_gripper": os.path.join(d, "camera_mount_{model}.yaml")}}
+            self.assertEqual(cm.load_for(cfg, "rg6"), (None, None, False))
+            rpy = cm.R_to_rpy([r[:3] for r in T[:3]])
+            cm.save(cm.path_for(cfg), [T[i][3] for i in range(3)], rpy, note="shared")
+            doc, path, own = cm.load_for(cfg, "robotiq_2f85")
+            self.assertEqual((path, own), (cfg["tool"]["camera_mount_file"], False))   # not calibrated on its own: the shared one
+            cm.save(cm.path_for(cfg, "robotiq_2f85"), [0.0, -0.1, 0.09], [0.0, 0.0, 0.0], note="robotiq set")
+            doc, path, own = cm.load_for(cfg, "robotiq_2f85")
+            self.assertEqual((path.endswith("camera_mount_robotiq_2f85.yaml"), own, doc["xyz_m"]), (True, True, [0.0, -0.1, 0.09]))
+            self.assertFalse(cm.load_for(cfg, "rg6")[2])                                 # the other set is untouched
+
     def test_save_load_arg(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "calibration", "camera_mount.yaml")

@@ -203,10 +203,11 @@ def _camera_in_use():
 
 
 def _camera_status(extra=None):
-    path = camera_mount.path_for(C.cell.cfg)
-    saved = camera_mount.load(path)
+    # (2026-11-22) the mounted gripper SET's camera mount: its own file, else the shared one (own_calibration false)
+    saved, path, own = camera_mount.load_for(C.cell.cfg, C.cell.gripper_model)
     use = _camera_in_use()
-    out = {"in_use": use, "saved": saved, "file": path,
+    out = {"in_use": use, "saved": saved, "file": path, "gripper_set": C.cell.gripper_model, "own_calibration": own,
+           "save_to": camera_mount.path_for(C.cell.cfg, C.cell.gripper_model),
            "restart_required": bool(saved and use) and not camera_mount.same(saved["xyz_m"], saved["rpy_rad"], use["xyz_m"], use["rpy_rad"])}
     if out["restart_required"]:
         out["note"] = "the saved camera mount differs from the one in use: " + RESTART
@@ -230,7 +231,7 @@ def camera_mount_set():
     d = request.get_json(silent=True)
     if not isinstance(d, dict):
         raise err(400, "bad_request", "JSON body must be an object")
-    path = camera_mount.path_for(C.cell.cfg)
+    path = camera_mount.path_for(C.cell.cfg, C.cell.gripper_model)     # (2026-11-22) the mounted gripper set's own file
     if not path:
         raise err(409, "no_camera_mount_file", "tool.camera_mount_file is not set in config/cell.yaml")
     if "T_tool0_camera" in d:

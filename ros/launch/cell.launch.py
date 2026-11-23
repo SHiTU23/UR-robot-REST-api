@@ -60,9 +60,11 @@ def _tcp(mock, ip):
 def _camera():
     """(2026-11-20) Hand the saved camera mount (the client's hand-eye calibration, PUT /robot/camera_mount) to the URDF
     through env UR_CAMERA_MOUNT; none saved: tool.camera_xyz_m / camera_rpy_rad of config/cell.yaml, as before."""
-    path = camera_mount.path_for(CELL)
-    d = camera_mount.load(path)
-    os.environ["UR_CAMERA_MOUNT"] = camera_mount.as_arg(d, CELL["tool"]) if d else ""
+    # (2026-11-22) the mounted gripper SET's own camera position (else the shared file) and its own camera holder (camera_mount.tool_for)
+    d, path, own = camera_mount.load_for(CELL, GRIPPER)
+    os.environ["UR_CAMERA_MOUNT"] = camera_mount.as_arg(d, camera_mount.tool_for(CELL["tool"], GM)) if d else ""
+    if d and not own:
+        print(f"[cell.launch] camera mount: no hand-eye of the {GRIPPER} set of its own yet: the shared one ({path})", flush=True)
     print(f"[cell.launch] camera mount: {'xyz ' + str(d['xyz_m']) + ' rpy ' + str(d['rpy_rad']) + ' (' + path + ', ' + str((d.get('source') or {}).get('at')) + ')' if d else 'config/cell.yaml tool.camera_*'}", flush=True)
 
 
